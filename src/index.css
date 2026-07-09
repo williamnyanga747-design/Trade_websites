@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-brand: var(--brand-color, #c41e3a);
+  --color-brand-hover: var(--brand-color-hover, #a81a32);
+  --color-brand-light: var(--brand-color-light, rgba(196, 30, 58, 0.15));
+}
+
+/* Custom styles for professional scrollbars and tables */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+@media print {
+  /* Force system color and background rendering (high-contrast / beautiful images and badges) */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide navigation, buttons, controls, and other unneeded UI widgets */
+  aside, header, .no-print, button, select, input, .print-hide, nav {
+    display: none !important;
+  }
+
+  /* Reset layout structure for proper printing flow */
+  html, body, #root, main {
+    background: white !important;
+    color: black !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    position: relative !important;
+  }
+
+  /* Strip absolute/fixed centering on the backdrop container so child modal layouts can flow */
+  .fixed.inset-0 {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: auto !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    z-index: auto !important;
+    display: block !important;
+  }
+
+  /* Expand print card fully with elegant margins */
+  .print-card {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: white !important;
+    overflow: visible !important;
+  }
+
+  /* Ensure thermal containers match exact slip printer width specifications */
+  .print-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Prevent background bleeding when printing active modal elements */
+  body:has(.print-card) #root > div:not(:has(.print-card)) {
+    display: none !important;
+  }
+  body:has(.print-container) #root > div:not(:has(.print-container)) {
+    display: none !important;
+  }
+}
