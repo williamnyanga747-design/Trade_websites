@@ -13,12 +13,11 @@ jobs:
     - name: 🚚 Get latest code
       uses: actions/checkout@v4
 
-    - name: 📂 Upload to cPanel via SFTP
+    - name: 📂 Upload to cPanel via FTPS
       uses: SamKirkland/FTP-Deploy-Action@v4.3.5
       with:
         server: ${{ secrets.FTP_HOST }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         server-dir: ${{ secrets.FTP_DIR }}
-        protocol: sftp # <-- This explicitly fixes the port 21 connection refusal
-        port: 22       # <-- Forces the secure port
+        protocol: ftps # <-- Changed from sftp to ftps
