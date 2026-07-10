@@ -3,7 +3,7 @@ name: Deploy to cPanel
 on:
   push:
     branches:
-      - main # Runs every time you sync code to your main branch
+      - main
 
 jobs:
   web-deploy:
@@ -13,10 +13,12 @@ jobs:
     - name: 🚚 Get latest code
       uses: actions/checkout@v4
 
-    - name: 📂 Upload to cPanel
+    - name: 📂 Upload to cPanel via SFTP
       uses: SamKirkland/FTP-Deploy-Action@v4.3.5
       with:
         server: ${{ secrets.FTP_HOST }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         server-dir: ${{ secrets.FTP_DIR }}
+        protocol: sftp # <-- This explicitly fixes the port 21 connection refusal
+        port: 22       # <-- Forces the secure port
