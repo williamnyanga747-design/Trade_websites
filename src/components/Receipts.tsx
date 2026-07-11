@@ -941,7 +941,7 @@ export default function Receipts({
 
                     {/* Thermal Note */}
                     <div className="mt-12 text-center text-[10px] text-gray-400 border-t pt-4 font-bold tracking-widest uppercase">
-                      Singida TradeCore ERP Workspace • System Secure Certified • All rights reserved 2026.
+                      Global TradeCore ERP Workspace • System Secure Certified • All rights reserved 2026.
                     </div>
                   </div>
                 )}

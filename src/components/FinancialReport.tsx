@@ -781,7 +781,7 @@ export default function FinancialReport({
               </div>
               <div className="flex items-center gap-3">
                 <span className="w-16 font-bold text-slate-500">Subject:</span>
-                <span className="font-semibold text-slate-300">Singida TradeCore Automated Monthly P&L Financial Statement [{selectedMonth}]</span>
+                <span className="font-semibold text-slate-300">Global TradeCore Automated Monthly P&L Financial Statement [{selectedMonth}]</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="w-16 font-bold text-slate-500">Attachment:</span>
@@ -797,7 +797,7 @@ export default function FinancialReport({
                 {/* Email Header */}
                 <div className="border-b pb-4 flex justify-between items-center">
                   <div>
-                    <h1 className="text-base font-black text-slate-900">Singida TradeCore Ltd</h1>
+                    <h1 className="text-base font-black text-slate-900">Global TradeCore Ltd</h1>
                     <p className="text-[10px] text-slate-500 font-medium">Enterprise ERP Dispatch Core • Automated Reporting Service</p>
                   </div>
                   <div className="text-right">
@@ -807,7 +807,7 @@ export default function FinancialReport({
 
                 <p className="font-semibold text-slate-700">Dear Stakeholder,</p>
                 <p className="leading-relaxed text-slate-600">
-                  Please find below the automatically generated commercial P&L and Operating Performance statement for period <strong className="text-slate-900">{selectedMonth}</strong>, compiled by Singida TradeCore ERP Workspace.
+                  Please find below the automatically generated commercial P&L and Operating Performance statement for period <strong className="text-slate-900">{selectedMonth}</strong>, compiled by Global TradeCore ERP Workspace.
                 </p>
 
                 {/* Simulated P&L mini table */}

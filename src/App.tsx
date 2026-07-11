@@ -1580,7 +1580,7 @@ export default function App() {
               <div className="flex items-center gap-3 mb-12">
                 <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center text-brand font-black text-xl shadow-md">T</div>
                 <div>
-                  <div className="font-black text-lg tracking-tight">Singida TradeCore</div>
+                  <div className="font-black text-lg tracking-tight">Global TradeCore</div>
                   <div className="text-[10px] text-gray-400 tracking-wider font-semibold uppercase mt-0.5">Enterprise commerce ERP</div>
                 </div>
               </div>

@@ -1,5 +1,5 @@
 {
-  "name": "TradeCore Unified Retail & Wholesale Commerce System",
+  "name": "Global TradeCore System",
   "description": "Premium multi-branch retail and wholesale ERP with a real-time barcode POS, stock directories, centralized master data registers, detailed expense logs, buying & selling receipt managers, and financial statement reports.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
