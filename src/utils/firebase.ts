@@ -65,6 +65,8 @@ export function subscribeToSystemDataCloud(callback: (data: any) => void): () =>
   return onSnapshot(docRef, (docSnap) => {
     if (docSnap.exists()) {
       callback(docSnap.data());
+    } else {
+      callback(null);
     }
   }, (error) => {
     console.error('Error in real-time cloud data subscription:', error);

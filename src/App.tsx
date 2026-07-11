@@ -28,7 +28,7 @@ import { translate, formatMoney, exportToExcel } from './utils/format';
 import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
-import { saveSystemDataToCloud, subscribeToSystemDataCloud } from './utils/firebase';
+import { saveSystemDataToCloud, fetchSystemDataFromCloud } from './utils/firebase';
 
 // Icons
 import {
@@ -200,7 +200,22 @@ export default function App() {
     if (initialData) {
       applyData(initialData);
     } else {
-      restoreFactoryDefaults();
+      // In-memory defaults only, to avoid blank screen, but DO NOT save to Cloud/LocalStorage yet
+      setCompanies(defaultCompanies);
+      setBranches(defaultBranches);
+      setStores(defaultStores);
+      setUsers(defaultUsers);
+      setCategories(defaultCategories);
+      setTaxes(defaultTaxes);
+      setSuppliers(defaultSuppliers);
+      setCustomers(defaultCustomers);
+      setStockItems(defaultStockItems);
+      setPurchaseOrders(defaultPurchaseOrders);
+      setSalesOrders(defaultSalesOrders);
+      setExpenses(defaultExpenses);
+      setAuditTrails(defaultAuditTrails);
+      setSettings(defaultSettings);
+      setRolePermissions(defaultRolePermissions);
     }
 
     // Check user session
@@ -214,62 +229,90 @@ export default function App() {
       }
     }
 
-    // 2. Subscribe to Firebase Firestore real-time cloud database
-    const unsubscribe = subscribeToSystemDataCloud((cloudData) => {
-      if (cloudData) {
-        // Apply cloud changes to state
-        applyData(cloudData);
-        // Persist to local cache
-        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
-        
-        // Ensure that if the current logged-in user's details changed, they are updated in session
-        const sessionUserStr = localStorage.getItem('tradecore_user');
-        if (sessionUserStr && cloudData.users) {
-          try {
-            const sessionUser = JSON.parse(sessionUserStr);
-            const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
-            if (freshUser) {
-              localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
-              setCurrentUser(freshUser);
+    // 2. Perform background cloud fetch to synchronize/populate
+    const syncCloudData = async () => {
+      try {
+        const cloudData = await fetchSystemDataFromCloud();
+        if (cloudData) {
+          // Avoid overwriting local updates if local cached data is newer
+          const localCachedStr = localStorage.getItem('tradecore_data');
+          if (localCachedStr) {
+            try {
+              const localCached = JSON.parse(localCachedStr);
+              if (localCached.lastUpdated && cloudData.lastUpdated) {
+                const localTime = new Date(localCached.lastUpdated).getTime();
+                const cloudTime = new Date(cloudData.lastUpdated).getTime();
+                if (cloudTime <= localTime) {
+                  console.log('Local state is newer or equal, skipping cloud override');
+                  return;
+                }
+              }
+            } catch (e) {
+              console.error('Failed to compare local and cloud update times', e);
             }
-          } catch (e) {
-            console.error(e);
           }
-        }
-      } else {
-        // Seed Firestore if it doesn't have system data yet
-        const localCached = localStorage.getItem('tradecore_data');
-        if (localCached) {
-          try {
-            saveSystemDataToCloud(JSON.parse(localCached));
-          } catch (e) {
-            console.error(e);
+
+          // Apply cloud changes to state
+          applyData(cloudData);
+          // Persist to local cache
+          localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
+
+          // Ensure logged-in user is updated in session if details changed
+          const sessionUserStr = localStorage.getItem('tradecore_user');
+          if (sessionUserStr && cloudData.users) {
+            try {
+              const sessionUser = JSON.parse(sessionUserStr);
+              const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
+              if (freshUser) {
+                localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
+                setCurrentUser(freshUser);
+              }
+            } catch (e) {
+              console.error(e);
+            }
           }
         } else {
-          const defaultState = {
-            companies: defaultCompanies,
-            branches: defaultBranches,
-            stores: defaultStores,
-            users: defaultUsers,
-            categories: defaultCategories,
-            taxes: defaultTaxes,
-            suppliers: defaultSuppliers,
-            customers: defaultCustomers,
-            stockItems: defaultStockItems,
-            purchaseOrders: defaultPurchaseOrders,
-            salesOrders: defaultSalesOrders,
-            expenses: defaultExpenses,
-            auditTrails: defaultAuditTrails,
-            settings: defaultSettings,
-            rolePermissions: defaultRolePermissions
-          };
-          saveSystemDataToCloud(defaultState);
+          // Seed Firestore if it doesn't have system data yet
+          const localCached = localStorage.getItem('tradecore_data');
+          if (localCached) {
+            saveSystemDataToCloud(JSON.parse(localCached));
+          } else {
+            const defaultState = {
+              companies: defaultCompanies,
+              branches: defaultBranches,
+              stores: defaultStores,
+              users: defaultUsers,
+              categories: defaultCategories,
+              taxes: defaultTaxes,
+              suppliers: defaultSuppliers,
+              customers: defaultCustomers,
+              stockItems: defaultStockItems,
+              purchaseOrders: defaultPurchaseOrders,
+              salesOrders: defaultSalesOrders,
+              expenses: defaultExpenses,
+              auditTrails: defaultAuditTrails,
+              settings: defaultSettings,
+              rolePermissions: defaultRolePermissions,
+              lastUpdated: new Date().toISOString()
+            };
+            localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
+            saveSystemDataToCloud(defaultState);
+          }
         }
+      } catch (err) {
+        console.warn('Could not sync cloud database. Running in 100% offline-first mode.', err);
       }
-    });
+    };
+
+    syncCloudData();
+
+    // 3. Keep devices in sync by polling every 10 seconds silently
+    const intervalId = setInterval(() => {
+      syncCloudData();
+    }, 10000);
 
     return () => {
-      unsubscribe();
+      clearInterval(intervalId);
     };
   }, []);
 
@@ -281,6 +324,7 @@ export default function App() {
     expenses: Expense[]; auditTrails: AuditTrail[]; settings: Settings;
     rolePermissions: Record<string, string[]>;
   }>) => {
+    const nowIso = new Date().toISOString();
     const freshData = {
       companies: updatedFields.companies !== undefined ? updatedFields.companies : companies,
       branches: updatedFields.branches !== undefined ? updatedFields.branches : branches,
@@ -297,6 +341,7 @@ export default function App() {
       auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : auditTrails,
       settings: updatedFields.settings !== undefined ? updatedFields.settings : settings,
       rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : rolePermissions,
+      lastUpdated: nowIso
     };
 
     // Update local cache for instant UI feedback
@@ -339,7 +384,8 @@ export default function App() {
       expenses: defaultExpenses,
       auditTrails: defaultAuditTrails,
       settings: defaultSettings,
-      rolePermissions: defaultRolePermissions
+      rolePermissions: defaultRolePermissions,
+      lastUpdated: new Date().toISOString()
     };
 
     localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
