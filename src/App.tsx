@@ -28,6 +28,7 @@ import { translate, formatMoney, exportToExcel } from './utils/format';
 import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
+import { saveSystemDataToCloud, subscribeToSystemDataCloud } from './utils/firebase';
 
 // Icons
 import {
@@ -155,40 +156,49 @@ export default function App() {
   // Master Modals
   const [showMasterModal, setShowMasterModal] = useState<{ type: string; obj: any } | null>(null);
 
-  // --- LOAD INITIAL DATA ---
+  // --- LOAD INITIAL DATA AND REAL-TIME SYNC FROM CLOUD ---
   useEffect(() => {
+    // 1. Instantly load local data to prevent any blank screen or login lag
     const stored = localStorage.getItem('tradecore_data');
+    let initialData = null;
     if (stored) {
       try {
-        const parsed = JSON.parse(stored);
-        const loadedCompanies = (parsed.companies || defaultCompanies).map((c: any) => {
-          if (!c.themeColor) {
-            const matchedDefault = defaultCompanies.find((dc: any) => dc.id === c.id);
-            return {
-              ...c,
-              themeColor: matchedDefault?.themeColor || (c.id === 2 ? '#1e3a8a' : '#c41e3a')
-            };
-          }
-          return c;
-        });
-        setCompanies(loadedCompanies);
-        setBranches(parsed.branches || defaultBranches);
-        setStores(parsed.stores || defaultStores);
-        setUsers(parsed.users || defaultUsers);
-        setCategories(parsed.categories || defaultCategories);
-        setTaxes(parsed.taxes || defaultTaxes);
-        setSuppliers(parsed.suppliers || defaultSuppliers);
-        setCustomers(parsed.customers || defaultCustomers);
-        setStockItems(parsed.stockItems || defaultStockItems);
-        setPurchaseOrders(parsed.purchaseOrders || defaultPurchaseOrders);
-        setSalesOrders(parsed.salesOrders || defaultSalesOrders);
-        setExpenses(parsed.expenses || defaultExpenses);
-        setAuditTrails(parsed.auditTrails || defaultAuditTrails);
-        setSettings(parsed.settings || defaultSettings);
-        setRolePermissions(parsed.rolePermissions || defaultRolePermissions);
+        initialData = JSON.parse(stored);
       } catch (e) {
-        restoreFactoryDefaults();
+        console.error('Failed to parse local tradecore_data', e);
       }
+    }
+
+    const applyData = (parsed: any) => {
+      const loadedCompanies = (parsed.companies || defaultCompanies).map((c: any) => {
+        if (!c.themeColor) {
+          const matchedDefault = defaultCompanies.find((dc: any) => dc.id === c.id);
+          return {
+            ...c,
+            themeColor: matchedDefault?.themeColor || (c.id === 2 ? '#1e3a8a' : '#c41e3a')
+          };
+        }
+        return c;
+      });
+      setCompanies(loadedCompanies);
+      setBranches(parsed.branches || defaultBranches);
+      setStores(parsed.stores || defaultStores);
+      setUsers(parsed.users || defaultUsers);
+      setCategories(parsed.categories || defaultCategories);
+      setTaxes(parsed.taxes || defaultTaxes);
+      setSuppliers(parsed.suppliers || defaultSuppliers);
+      setCustomers(parsed.customers || defaultCustomers);
+      setStockItems(parsed.stockItems || defaultStockItems);
+      setPurchaseOrders(parsed.purchaseOrders || defaultPurchaseOrders);
+      setSalesOrders(parsed.salesOrders || defaultSalesOrders);
+      setExpenses(parsed.expenses || defaultExpenses);
+      setAuditTrails(parsed.auditTrails || defaultAuditTrails);
+      setSettings(parsed.settings || defaultSettings);
+      setRolePermissions(parsed.rolePermissions || defaultRolePermissions);
+    };
+
+    if (initialData) {
+      applyData(initialData);
     } else {
       restoreFactoryDefaults();
     }
@@ -203,9 +213,67 @@ export default function App() {
         localStorage.removeItem('tradecore_user');
       }
     }
+
+    // 2. Subscribe to Firebase Firestore real-time cloud database
+    const unsubscribe = subscribeToSystemDataCloud((cloudData) => {
+      if (cloudData) {
+        // Apply cloud changes to state
+        applyData(cloudData);
+        // Persist to local cache
+        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
+        
+        // Ensure that if the current logged-in user's details changed, they are updated in session
+        const sessionUserStr = localStorage.getItem('tradecore_user');
+        if (sessionUserStr && cloudData.users) {
+          try {
+            const sessionUser = JSON.parse(sessionUserStr);
+            const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
+            if (freshUser) {
+              localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
+              setCurrentUser(freshUser);
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      } else {
+        // Seed Firestore if it doesn't have system data yet
+        const localCached = localStorage.getItem('tradecore_data');
+        if (localCached) {
+          try {
+            saveSystemDataToCloud(JSON.parse(localCached));
+          } catch (e) {
+            console.error(e);
+          }
+        } else {
+          const defaultState = {
+            companies: defaultCompanies,
+            branches: defaultBranches,
+            stores: defaultStores,
+            users: defaultUsers,
+            categories: defaultCategories,
+            taxes: defaultTaxes,
+            suppliers: defaultSuppliers,
+            customers: defaultCustomers,
+            stockItems: defaultStockItems,
+            purchaseOrders: defaultPurchaseOrders,
+            salesOrders: defaultSalesOrders,
+            expenses: defaultExpenses,
+            auditTrails: defaultAuditTrails,
+            settings: defaultSettings,
+            rolePermissions: defaultRolePermissions
+          };
+          saveSystemDataToCloud(defaultState);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
-  // --- SYNC TO STORAGE ---
+  // --- SYNC TO STORAGE & CLOUD ---
   const saveAllData = (updatedFields: Partial<{
     companies: Company[]; branches: Branch[]; stores: Store[]; users: User[];
     categories: string[]; taxes: Tax[]; suppliers: Supplier[]; customers: Customer[];
@@ -231,7 +299,11 @@ export default function App() {
       rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : rolePermissions,
     };
 
+    // Update local cache for instant UI feedback
     localStorage.setItem('tradecore_data', JSON.stringify(freshData));
+    
+    // Write changes asynchronously to Firestore cloud database
+    saveSystemDataToCloud(freshData);
     
     // Update local React state instantly
     if (updatedFields.companies !== undefined) setCompanies(updatedFields.companies);
@@ -252,7 +324,7 @@ export default function App() {
   };
 
   const restoreFactoryDefaults = () => {
-    localStorage.setItem('tradecore_data', JSON.stringify({
+    const defaultState = {
       companies: defaultCompanies,
       branches: defaultBranches,
       stores: defaultStores,
@@ -268,7 +340,11 @@ export default function App() {
       auditTrails: defaultAuditTrails,
       settings: defaultSettings,
       rolePermissions: defaultRolePermissions
-    }));
+    };
+
+    localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
+    saveSystemDataToCloud(defaultState);
+
     setCompanies(defaultCompanies);
     setBranches(defaultBranches);
     setStores(defaultStores);
