@@ -1,5 +1,15 @@
 import { initializeApp, getApp, getApps } from 'firebase/app';
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager,
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocFromServer,
+  getDocFromCache,
+  onSnapshot 
+} from 'firebase/firestore';
 import config from '../../firebase-applet-config.json';
 
 // Initialize Firebase App
@@ -14,11 +24,17 @@ const firebaseConfig = {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore
-// Use the custom database ID if provided in the configuration, otherwise default
+// Configure Firestore with long polling and persistent offline local cache to handle connectivity drops or iframe constraints
+const dbSettings = {
+  experimentalForceLongPolling: true,
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
+};
+
 const db = config.firestoreDatabaseId 
-  ? getFirestore(app, config.firestoreDatabaseId)
-  : getFirestore(app);
+  ? initializeFirestore(app, dbSettings, config.firestoreDatabaseId)
+  : initializeFirestore(app, dbSettings);
 
 const SYSTEM_COLLECTION = 'system';
 const DATA_DOC_ID = 'tradecore_data';
@@ -31,28 +47,38 @@ export async function saveSystemDataToCloud(data: any): Promise<void> {
     const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
     // Sanitize any undefined properties recursively to prevent Firestore errors
     const sanitized = JSON.parse(JSON.stringify(data));
-    await setDoc(docRef, {
-      ...sanitized,
-      lastUpdated: new Date().toISOString()
-    }, { merge: true });
+    if (!sanitized.lastUpdated) {
+      sanitized.lastUpdated = new Date().toISOString();
+    }
+    await setDoc(docRef, sanitized);
   } catch (error) {
     console.error('Error saving system data to cloud:', error);
   }
 }
 
 /**
- * Fetches the unified system state from Firestore once
+ * Fetches the unified system state from Firestore.
+ * Prefers the live server version to ensure multi-device synchronization,
+ * but falls back to the local cache if offline or on connection failure.
  */
 export async function fetchSystemDataFromCloud(): Promise<any | null> {
+  const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
   try {
-    const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
-    const docSnap = await getDoc(docRef);
+    const docSnap = await getDocFromServer(docRef);
     if (docSnap.exists()) {
       return docSnap.data();
     }
     return null;
-  } catch (error) {
-    console.error('Error fetching system data from cloud:', error);
+  } catch (serverError) {
+    console.warn('Could not fetch from Firestore server, attempting local cache fallback...', serverError);
+    try {
+      const docSnap = await getDocFromCache(docRef);
+      if (docSnap.exists()) {
+        return docSnap.data();
+      }
+    } catch (cacheError) {
+      console.error('Error fetching system data from local cache:', cacheError);
+    }
     return null;
   }
 }

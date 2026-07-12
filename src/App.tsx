@@ -28,7 +28,7 @@ import { translate, formatMoney, exportToExcel } from './utils/format';
 import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
-import { saveSystemDataToCloud, fetchSystemDataFromCloud } from './utils/firebase';
+import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
 
 // Icons
 import {
@@ -97,6 +97,44 @@ export default function App() {
   const activeSalesOrders = activeData.salesOrders;
   const activeExpenses = activeData.expenses;
 
+  // --- SYNC COOLDOWN REFS ---
+  const lastLocalWriteTimeRef = React.useRef<number>(0);
+
+  // --- DATABASE STATE REF (for synchronous, race-condition-free updates) ---
+  const dbStateRef = React.useRef<{
+    companies: Company[];
+    branches: Branch[];
+    stores: Store[];
+    users: User[];
+    categories: string[];
+    taxes: Tax[];
+    suppliers: Supplier[];
+    customers: Customer[];
+    stockItems: StockItem[];
+    purchaseOrders: PurchaseOrder[];
+    salesOrders: SalesOrder[];
+    expenses: Expense[];
+    auditTrails: AuditTrail[];
+    settings: Settings;
+    rolePermissions: Record<string, string[]>;
+  }>({
+    companies: [],
+    branches: [],
+    stores: [],
+    users: [],
+    categories: [],
+    taxes: [],
+    suppliers: [],
+    customers: [],
+    stockItems: [],
+    purchaseOrders: [],
+    salesOrders: [],
+    expenses: [],
+    auditTrails: [],
+    settings: defaultSettings,
+    rolePermissions: defaultRolePermissions,
+  });
+
   // --- AUTH / SECURITY STATES ---
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -156,6 +194,56 @@ export default function App() {
   // Master Modals
   const [showMasterModal, setShowMasterModal] = useState<{ type: string; obj: any } | null>(null);
 
+  // Apply parsed cloud/local database state to React state
+  const applyData = (parsed: any) => {
+    const loadedCompanies = (parsed.companies || defaultCompanies).map((c: any) => {
+      if (!c.themeColor) {
+        const matchedDefault = defaultCompanies.find((dc: any) => dc.id === c.id);
+        return {
+          ...c,
+          themeColor: matchedDefault?.themeColor || (c.id === 2 ? '#1e3a8a' : '#c41e3a')
+        };
+      }
+      return c;
+    });
+
+    const updatedState = {
+      companies: loadedCompanies,
+      branches: parsed.branches || defaultBranches,
+      stores: parsed.stores || defaultStores,
+      users: parsed.users || defaultUsers,
+      categories: parsed.categories || defaultCategories,
+      taxes: parsed.taxes || defaultTaxes,
+      suppliers: parsed.suppliers || defaultSuppliers,
+      customers: parsed.customers || defaultCustomers,
+      stockItems: parsed.stockItems || defaultStockItems,
+      purchaseOrders: parsed.purchaseOrders || defaultPurchaseOrders,
+      salesOrders: parsed.salesOrders || defaultSalesOrders,
+      expenses: parsed.expenses || defaultExpenses,
+      auditTrails: parsed.auditTrails || defaultAuditTrails,
+      settings: parsed.settings || defaultSettings,
+      rolePermissions: parsed.rolePermissions || defaultRolePermissions,
+    };
+
+    dbStateRef.current = updatedState;
+
+    setCompanies(updatedState.companies);
+    setBranches(updatedState.branches);
+    setStores(updatedState.stores);
+    setUsers(updatedState.users);
+    setCategories(updatedState.categories);
+    setTaxes(updatedState.taxes);
+    setSuppliers(updatedState.suppliers);
+    setCustomers(updatedState.customers);
+    setStockItems(updatedState.stockItems);
+    setPurchaseOrders(updatedState.purchaseOrders);
+    setSalesOrders(updatedState.salesOrders);
+    setExpenses(updatedState.expenses);
+    setAuditTrails(updatedState.auditTrails);
+    setSettings(updatedState.settings);
+    setRolePermissions(updatedState.rolePermissions);
+  };
+
   // --- LOAD INITIAL DATA AND REAL-TIME SYNC FROM CLOUD ---
   useEffect(() => {
     // 1. Instantly load local data to prevent any blank screen or login lag
@@ -169,38 +257,28 @@ export default function App() {
       }
     }
 
-    const applyData = (parsed: any) => {
-      const loadedCompanies = (parsed.companies || defaultCompanies).map((c: any) => {
-        if (!c.themeColor) {
-          const matchedDefault = defaultCompanies.find((dc: any) => dc.id === c.id);
-          return {
-            ...c,
-            themeColor: matchedDefault?.themeColor || (c.id === 2 ? '#1e3a8a' : '#c41e3a')
-          };
-        }
-        return c;
-      });
-      setCompanies(loadedCompanies);
-      setBranches(parsed.branches || defaultBranches);
-      setStores(parsed.stores || defaultStores);
-      setUsers(parsed.users || defaultUsers);
-      setCategories(parsed.categories || defaultCategories);
-      setTaxes(parsed.taxes || defaultTaxes);
-      setSuppliers(parsed.suppliers || defaultSuppliers);
-      setCustomers(parsed.customers || defaultCustomers);
-      setStockItems(parsed.stockItems || defaultStockItems);
-      setPurchaseOrders(parsed.purchaseOrders || defaultPurchaseOrders);
-      setSalesOrders(parsed.salesOrders || defaultSalesOrders);
-      setExpenses(parsed.expenses || defaultExpenses);
-      setAuditTrails(parsed.auditTrails || defaultAuditTrails);
-      setSettings(parsed.settings || defaultSettings);
-      setRolePermissions(parsed.rolePermissions || defaultRolePermissions);
-    };
-
     if (initialData) {
       applyData(initialData);
     } else {
       // In-memory defaults only, to avoid blank screen, but DO NOT save to Cloud/LocalStorage yet
+      const defaults = {
+        companies: defaultCompanies,
+        branches: defaultBranches,
+        stores: defaultStores,
+        users: defaultUsers,
+        categories: defaultCategories,
+        taxes: defaultTaxes,
+        suppliers: defaultSuppliers,
+        customers: defaultCustomers,
+        stockItems: defaultStockItems,
+        purchaseOrders: defaultPurchaseOrders,
+        salesOrders: defaultSalesOrders,
+        expenses: defaultExpenses,
+        auditTrails: defaultAuditTrails,
+        settings: defaultSettings,
+        rolePermissions: defaultRolePermissions,
+      };
+      dbStateRef.current = defaults;
       setCompanies(defaultCompanies);
       setBranches(defaultBranches);
       setStores(defaultStores);
@@ -229,128 +307,140 @@ export default function App() {
       }
     }
 
-    // 2. Perform background cloud fetch to synchronize/populate
-    const syncCloudData = async () => {
-      try {
-        const cloudData = await fetchSystemDataFromCloud();
-        if (cloudData) {
-          // Avoid overwriting local updates if local cached data is newer
-          const localCachedStr = localStorage.getItem('tradecore_data');
-          if (localCachedStr) {
-            try {
-              const localCached = JSON.parse(localCachedStr);
-              if (localCached.lastUpdated && cloudData.lastUpdated) {
-                const localTime = new Date(localCached.lastUpdated).getTime();
-                const cloudTime = new Date(cloudData.lastUpdated).getTime();
-                if (cloudTime <= localTime) {
-                  console.log('Local state is newer or equal, skipping cloud override');
-                  return;
-                }
+    // 2. Keep devices in sync by subscribing to cloud changes in real-time
+    const unsubscribe = subscribeToSystemDataCloud((cloudData) => {
+      // Check if we wrote locally in the last 5 seconds to avoid overwriting optimistic state
+      if (Date.now() - lastLocalWriteTimeRef.current < 5000) {
+        console.log('[Sync] Skipping real-time update to protect recent optimistic local write');
+        return;
+      }
+      if (cloudData) {
+        // Avoid overwriting local updates if local cached data is newer or equal
+        const localCachedStr = localStorage.getItem('tradecore_data');
+        if (localCachedStr) {
+          try {
+            const localCached = JSON.parse(localCachedStr);
+            if (localCached.lastUpdated && cloudData.lastUpdated) {
+              const localTime = new Date(localCached.lastUpdated).getTime();
+              const cloudTime = new Date(cloudData.lastUpdated).getTime();
+              if (cloudTime <= localTime) {
+                // Already in sync or local is newer, avoid overriding
+                return;
               }
-            } catch (e) {
-              console.error('Failed to compare local and cloud update times', e);
             }
-          }
-
-          // Apply cloud changes to state
-          applyData(cloudData);
-          // Persist to local cache
-          localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
-
-          // Ensure logged-in user is updated in session if details changed
-          const sessionUserStr = localStorage.getItem('tradecore_user');
-          if (sessionUserStr && cloudData.users) {
-            try {
-              const sessionUser = JSON.parse(sessionUserStr);
-              const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
-              if (freshUser) {
-                localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
-                setCurrentUser(freshUser);
-              }
-            } catch (e) {
-              console.error(e);
-            }
-          }
-        } else {
-          // Seed Firestore if it doesn't have system data yet
-          const localCached = localStorage.getItem('tradecore_data');
-          if (localCached) {
-            saveSystemDataToCloud(JSON.parse(localCached));
-          } else {
-            const defaultState = {
-              companies: defaultCompanies,
-              branches: defaultBranches,
-              stores: defaultStores,
-              users: defaultUsers,
-              categories: defaultCategories,
-              taxes: defaultTaxes,
-              suppliers: defaultSuppliers,
-              customers: defaultCustomers,
-              stockItems: defaultStockItems,
-              purchaseOrders: defaultPurchaseOrders,
-              salesOrders: defaultSalesOrders,
-              expenses: defaultExpenses,
-              auditTrails: defaultAuditTrails,
-              settings: defaultSettings,
-              rolePermissions: defaultRolePermissions,
-              lastUpdated: new Date().toISOString()
-            };
-            localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
-            saveSystemDataToCloud(defaultState);
+          } catch (e) {
+            console.error('Failed to compare local and cloud update times', e);
           }
         }
-      } catch (err) {
-        console.warn('Could not sync cloud database. Running in 100% offline-first mode.', err);
+
+        console.log('[Sync] Received real-time cloud update!');
+        // Apply cloud changes to state
+        applyData(cloudData);
+        // Persist to local cache
+        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
+
+        // Ensure logged-in user is updated in session if details changed
+        const sessionUserStr = localStorage.getItem('tradecore_user');
+        if (sessionUserStr && cloudData.users) {
+          try {
+            const sessionUser = JSON.parse(sessionUserStr);
+            const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
+            if (freshUser) {
+              localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
+              setCurrentUser(freshUser);
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      } else {
+        // Cloud data is null - seed database
+        console.log('[Sync] Cloud database is empty. Seeding from local cache or defaults...');
+        const localCached = localStorage.getItem('tradecore_data');
+        if (localCached) {
+          try {
+            const parsed = JSON.parse(localCached);
+            saveSystemDataToCloud(parsed);
+          } catch (e) {
+            console.error('Failed to parse local cache for seeding', e);
+          }
+        } else {
+          const defaultState = {
+            companies: defaultCompanies,
+            branches: defaultBranches,
+            stores: defaultStores,
+            users: defaultUsers,
+            categories: defaultCategories,
+            taxes: defaultTaxes,
+            suppliers: defaultSuppliers,
+            customers: defaultCustomers,
+            stockItems: defaultStockItems,
+            purchaseOrders: defaultPurchaseOrders,
+            salesOrders: defaultSalesOrders,
+            expenses: defaultExpenses,
+            auditTrails: defaultAuditTrails,
+            settings: defaultSettings,
+            rolePermissions: defaultRolePermissions,
+            lastUpdated: new Date().toISOString()
+          };
+          localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
+          saveSystemDataToCloud(defaultState);
+        }
       }
-    };
-
-    syncCloudData();
-
-    // 3. Keep devices in sync by polling every 10 seconds silently
-    const intervalId = setInterval(() => {
-      syncCloudData();
-    }, 10000);
+    });
 
     return () => {
-      clearInterval(intervalId);
+      unsubscribe();
     };
   }, []);
 
   // --- SYNC TO STORAGE & CLOUD ---
-  const saveAllData = (updatedFields: Partial<{
+  const saveAllData = async (updatedFields: Partial<{
     companies: Company[]; branches: Branch[]; stores: Store[]; users: User[];
     categories: string[]; taxes: Tax[]; suppliers: Supplier[]; customers: Customer[];
     stockItems: StockItem[]; purchaseOrders: PurchaseOrder[]; salesOrders: SalesOrder[];
     expenses: Expense[]; auditTrails: AuditTrail[]; settings: Settings;
     rolePermissions: Record<string, string[]>;
   }>) => {
-    const nowIso = new Date().toISOString();
-    const freshData = {
-      companies: updatedFields.companies !== undefined ? updatedFields.companies : companies,
-      branches: updatedFields.branches !== undefined ? updatedFields.branches : branches,
-      stores: updatedFields.stores !== undefined ? updatedFields.stores : stores,
-      users: updatedFields.users !== undefined ? updatedFields.users : users,
-      categories: updatedFields.categories !== undefined ? updatedFields.categories : categories,
-      taxes: updatedFields.taxes !== undefined ? updatedFields.taxes : taxes,
-      suppliers: updatedFields.suppliers !== undefined ? updatedFields.suppliers : suppliers,
-      customers: updatedFields.customers !== undefined ? updatedFields.customers : customers,
-      stockItems: updatedFields.stockItems !== undefined ? updatedFields.stockItems : stockItems,
-      purchaseOrders: updatedFields.purchaseOrders !== undefined ? updatedFields.purchaseOrders : purchaseOrders,
-      salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : salesOrders,
-      expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : expenses,
-      auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : auditTrails,
-      settings: updatedFields.settings !== undefined ? updatedFields.settings : settings,
-      rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : rolePermissions,
-      lastUpdated: nowIso
-    };
+    // Record cooldown timestamp to pause background synchronization polling
+    lastLocalWriteTimeRef.current = Date.now();
 
-    // Update local cache for instant UI feedback
-    localStorage.setItem('tradecore_data', JSON.stringify(freshData));
+    // Fetch the previous cached update time before applying optimistic changes
+    const prevCachedStr = localStorage.getItem('tradecore_data');
+    let prevLastUpdated = 0;
+    if (prevCachedStr) {
+      try {
+        const prev = JSON.parse(prevCachedStr);
+        prevLastUpdated = new Date(prev.lastUpdated || 0).getTime();
+      } catch (e) {}
+    }
+
+    const nowIso = new Date().toISOString();
     
-    // Write changes asynchronously to Firestore cloud database
-    saveSystemDataToCloud(freshData);
-    
-    // Update local React state instantly
+    // Get absolute latest synchronous values from the reference
+    const current = dbStateRef.current;
+
+    // Mutate reference instantly so any subsequent call in the same tick sees these changes
+    const nextState = {
+      companies: updatedFields.companies !== undefined ? updatedFields.companies : current.companies,
+      branches: updatedFields.branches !== undefined ? updatedFields.branches : current.branches,
+      stores: updatedFields.stores !== undefined ? updatedFields.stores : current.stores,
+      users: updatedFields.users !== undefined ? updatedFields.users : current.users,
+      categories: updatedFields.categories !== undefined ? updatedFields.categories : current.categories,
+      taxes: updatedFields.taxes !== undefined ? updatedFields.taxes : current.taxes,
+      suppliers: updatedFields.suppliers !== undefined ? updatedFields.suppliers : current.suppliers,
+      customers: updatedFields.customers !== undefined ? updatedFields.customers : current.customers,
+      stockItems: updatedFields.stockItems !== undefined ? updatedFields.stockItems : current.stockItems,
+      purchaseOrders: updatedFields.purchaseOrders !== undefined ? updatedFields.purchaseOrders : current.purchaseOrders,
+      salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : current.salesOrders,
+      expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : current.expenses,
+      auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : current.auditTrails,
+      settings: updatedFields.settings !== undefined ? updatedFields.settings : current.settings,
+      rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : current.rolePermissions,
+    };
+    dbStateRef.current = nextState;
+
+    // 1. Update React states instantly for 100% snappy UI response
     if (updatedFields.companies !== undefined) setCompanies(updatedFields.companies);
     if (updatedFields.branches !== undefined) setBranches(updatedFields.branches);
     if (updatedFields.stores !== undefined) setStores(updatedFields.stores);
@@ -366,6 +456,93 @@ export default function App() {
     if (updatedFields.auditTrails !== undefined) setAuditTrails(updatedFields.auditTrails);
     if (updatedFields.settings !== undefined) setSettings(updatedFields.settings);
     if (updatedFields.rolePermissions !== undefined) setRolePermissions(updatedFields.rolePermissions);
+
+    // 2. Compute local state with optimistic changes
+    const freshDataLocal = {
+      ...nextState,
+      lastUpdated: nowIso
+    };
+
+    // 3. Write optimistic cache to localStorage instantly
+    localStorage.setItem('tradecore_data', JSON.stringify(freshDataLocal));
+
+    // 4. Handle merge with cloud concurrently in the background (pull-merge-push)
+    try {
+      const cloudData = await fetchSystemDataFromCloud();
+      let mergedData = { ...freshDataLocal };
+
+      if (cloudData) {
+        const cloudTime = new Date(cloudData.lastUpdated || 0).getTime();
+        const isCloudNewer = cloudTime > prevLastUpdated;
+        
+        console.log(`[Sync] Cloud time: ${cloudTime}, Prev local time: ${prevLastUpdated}. Is cloud newer? ${isCloudNewer}`);
+
+        // If cloud is newer, pull fields we did NOT update in this tick.
+        const latestDb = dbStateRef.current;
+        mergedData = {
+          companies: updatedFields.companies !== undefined ? updatedFields.companies : (isCloudNewer ? (cloudData.companies || latestDb.companies) : latestDb.companies),
+          branches: updatedFields.branches !== undefined ? updatedFields.branches : (isCloudNewer ? (cloudData.branches || latestDb.branches) : latestDb.branches),
+          stores: updatedFields.stores !== undefined ? updatedFields.stores : (isCloudNewer ? (cloudData.stores || latestDb.stores) : latestDb.stores),
+          users: updatedFields.users !== undefined ? updatedFields.users : (isCloudNewer ? (cloudData.users || latestDb.users) : latestDb.users),
+          categories: updatedFields.categories !== undefined ? updatedFields.categories : (isCloudNewer ? (cloudData.categories || latestDb.categories) : latestDb.categories),
+          taxes: updatedFields.taxes !== undefined ? updatedFields.taxes : (isCloudNewer ? (cloudData.taxes || latestDb.taxes) : latestDb.taxes),
+          suppliers: updatedFields.suppliers !== undefined ? updatedFields.suppliers : (isCloudNewer ? (cloudData.suppliers || latestDb.suppliers) : latestDb.suppliers),
+          customers: updatedFields.customers !== undefined ? updatedFields.customers : (isCloudNewer ? (cloudData.customers || latestDb.customers) : latestDb.customers),
+          stockItems: updatedFields.stockItems !== undefined ? updatedFields.stockItems : (isCloudNewer ? (cloudData.stockItems || latestDb.stockItems) : latestDb.stockItems),
+          purchaseOrders: updatedFields.purchaseOrders !== undefined ? updatedFields.purchaseOrders : (isCloudNewer ? (cloudData.purchaseOrders || latestDb.purchaseOrders) : latestDb.purchaseOrders),
+          salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : (isCloudNewer ? (cloudData.salesOrders || latestDb.salesOrders) : latestDb.salesOrders),
+          expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : (isCloudNewer ? (cloudData.expenses || latestDb.expenses) : latestDb.expenses),
+          auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : (isCloudNewer ? (cloudData.auditTrails || latestDb.auditTrails) : latestDb.auditTrails),
+          settings: updatedFields.settings !== undefined ? updatedFields.settings : (isCloudNewer ? (cloudData.settings || latestDb.settings) : latestDb.settings),
+          rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : (isCloudNewer ? (cloudData.rolePermissions || latestDb.rolePermissions) : latestDb.rolePermissions),
+          lastUpdated: new Date().toISOString()
+        };
+
+        // Update React states if cloud was indeed newer and we merged any fields
+        if (isCloudNewer) {
+          dbStateRef.current = {
+            companies: mergedData.companies,
+            branches: mergedData.branches,
+            stores: mergedData.stores,
+            users: mergedData.users,
+            categories: mergedData.categories,
+            taxes: mergedData.taxes,
+            suppliers: mergedData.suppliers,
+            customers: mergedData.customers,
+            stockItems: mergedData.stockItems,
+            purchaseOrders: mergedData.purchaseOrders,
+            salesOrders: mergedData.salesOrders,
+            expenses: mergedData.expenses,
+            auditTrails: mergedData.auditTrails,
+            settings: mergedData.settings,
+            rolePermissions: mergedData.rolePermissions,
+          };
+
+          if (updatedFields.companies === undefined && cloudData.companies) setCompanies(cloudData.companies);
+          if (updatedFields.branches === undefined && cloudData.branches) setBranches(cloudData.branches);
+          if (updatedFields.stores === undefined && cloudData.stores) setStores(cloudData.stores);
+          if (updatedFields.users === undefined && cloudData.users) setUsers(cloudData.users);
+          if (updatedFields.categories === undefined && cloudData.categories) setCategories(cloudData.categories);
+          if (updatedFields.taxes === undefined && cloudData.taxes) setTaxes(cloudData.taxes);
+          if (updatedFields.suppliers === undefined && cloudData.suppliers) setSuppliers(cloudData.suppliers);
+          if (updatedFields.customers === undefined && cloudData.customers) setCustomers(cloudData.customers);
+          if (updatedFields.stockItems === undefined && cloudData.stockItems) setStockItems(cloudData.stockItems);
+          if (updatedFields.purchaseOrders === undefined && cloudData.purchaseOrders) setPurchaseOrders(cloudData.purchaseOrders);
+          if (updatedFields.salesOrders === undefined && cloudData.salesOrders) setSalesOrders(cloudData.salesOrders);
+          if (updatedFields.expenses === undefined && cloudData.expenses) setExpenses(cloudData.expenses);
+          if (updatedFields.auditTrails === undefined && cloudData.auditTrails) setAuditTrails(cloudData.auditTrails);
+          if (updatedFields.settings === undefined && cloudData.settings) setSettings(cloudData.settings);
+          if (updatedFields.rolePermissions === undefined && cloudData.rolePermissions) setRolePermissions(cloudData.rolePermissions);
+        }
+      }
+
+      // Write final state to localStorage and cloud Firestore
+      localStorage.setItem('tradecore_data', JSON.stringify(mergedData));
+      await saveSystemDataToCloud(mergedData);
+    } catch (err) {
+      console.warn('Background cloud merge failed, using local storage. Offline mode.', err);
+      await saveSystemDataToCloud(freshDataLocal);
+    }
   };
 
   const restoreFactoryDefaults = () => {
@@ -622,9 +799,28 @@ export default function App() {
   };
 
   // --- ACTIONS ---
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const found = users.find(u => u.username === loginUsername && u.password === loginPassword);
+    
+    let latestUsers = users;
+    // Perform an active pre-login sync to ensure we have the latest registered credentials from the cloud
+    try {
+      const cloudData = await fetchSystemDataFromCloud();
+      if (cloudData) {
+        applyData(cloudData);
+        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
+        if (cloudData.users) {
+          latestUsers = cloudData.users;
+        }
+      }
+    } catch (err) {
+      console.warn('Pre-login cloud fetch failed, falling back to local credentials', err);
+    }
+
+    const found = latestUsers.find(u => 
+      u.username.trim().toLowerCase() === loginUsername.trim().toLowerCase() && 
+      u.password === loginPassword
+    );
     if (found) {
       if (found.status === 'Blocked') {
         alert('Your access credentials have been blocked.');
