@@ -33,7 +33,7 @@ export default function Sidebar({
   // Helper for submenus to check if any of their children is active
   const isMasterActive = ['companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery'].includes(currentPage);
   const isImportActive = ['import-stock', 'import-customers', 'import-suppliers'].includes(currentPage);
-  const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details'].includes(currentPage);
+  const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts'].includes(currentPage);
   const isUserActive = ['user-info', 'user-access'].includes(currentPage);
 
   const [showMasters, setShowMasters] = useState(isMasterActive);
@@ -193,7 +193,7 @@ export default function Sidebar({
                       currentPage === 'companies' ? 'text-white font-bold' : 'text-gray-400 hover:text-white'
                     }`}
                   >
-                    Companies
+                    {t('Companies')}
                   </button>
                 )}
                 {isAllowed('branches') && (
@@ -203,7 +203,7 @@ export default function Sidebar({
                       currentPage === 'branches' ? 'text-white font-bold' : 'text-gray-400 hover:text-white'
                     }`}
                   >
-                    Branches
+                    {t('Branches')}
                   </button>
                 )}
                 {isAllowed('stores') && (
@@ -451,6 +451,16 @@ export default function Sidebar({
                     }`}
                   >
                     {t('Purchase Order Details')}
+                  </button>
+                )}
+                {isAllowed('report-shifts') && (
+                  <button
+                    onClick={() => onNavigate('report-shifts')}
+                    className={`w-full text-left px-3 py-1.5 rounded transition ${
+                      currentPage === 'report-shifts' ? 'text-white font-bold text-xs' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {t('POS Shift & Drawer Ledger')}
                   </button>
                 )}
               </div>

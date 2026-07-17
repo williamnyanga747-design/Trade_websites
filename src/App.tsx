@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings
+  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings, PosShift
 } from './types';
 import {
   defaultSettings, defaultRolePermissions, defaultCompanies, defaultBranches, defaultStores, defaultUsers,
@@ -29,6 +29,9 @@ import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
 import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Cell, PieChart, Pie
+} from 'recharts';
 
 // Icons
 import {
@@ -36,7 +39,7 @@ import {
   BarChart3, Users, UserCircle, LogOut, Settings as SettingsIcon, Search, Plus, ArrowLeftRight,
   Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X,
   ShieldAlert, DollarSign as DollarIcon, CreditCard, Monitor, Barcode, Store as StoreIcon,
-  Calendar, TrendingUp, Info, ShieldCheck, Lock
+  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe
 } from 'lucide-react';
 
 // Helper function to darken/lighten hex colors dynamically
@@ -71,6 +74,7 @@ export default function App() {
   const [auditTrails, setAuditTrails] = useState<AuditTrail[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>(defaultRolePermissions);
+  const [posShifts, setPosShifts] = useState<PosShift[]>([]);
 
   // --- OPERATIONAL STATES ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -117,6 +121,7 @@ export default function App() {
     auditTrails: AuditTrail[];
     settings: Settings;
     rolePermissions: Record<string, string[]>;
+    posShifts: PosShift[];
   }>({
     companies: [],
     branches: [],
@@ -133,6 +138,7 @@ export default function App() {
     auditTrails: [],
     settings: defaultSettings,
     rolePermissions: defaultRolePermissions,
+    posShifts: [],
   });
 
   // --- AUTH / SECURITY STATES ---
@@ -223,6 +229,7 @@ export default function App() {
       auditTrails: parsed.auditTrails || defaultAuditTrails,
       settings: parsed.settings || defaultSettings,
       rolePermissions: parsed.rolePermissions || defaultRolePermissions,
+      posShifts: parsed.posShifts || [],
     };
 
     dbStateRef.current = updatedState;
@@ -242,6 +249,7 @@ export default function App() {
     setAuditTrails(updatedState.auditTrails);
     setSettings(updatedState.settings);
     setRolePermissions(updatedState.rolePermissions);
+    setPosShifts(updatedState.posShifts);
   };
 
   // --- LOAD INITIAL DATA AND REAL-TIME SYNC FROM CLOUD ---
@@ -401,6 +409,7 @@ export default function App() {
     stockItems: StockItem[]; purchaseOrders: PurchaseOrder[]; salesOrders: SalesOrder[];
     expenses: Expense[]; auditTrails: AuditTrail[]; settings: Settings;
     rolePermissions: Record<string, string[]>;
+    posShifts: PosShift[];
   }>) => {
     // Record cooldown timestamp to pause background synchronization polling
     lastLocalWriteTimeRef.current = Date.now();
@@ -437,6 +446,7 @@ export default function App() {
       auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : current.auditTrails,
       settings: updatedFields.settings !== undefined ? updatedFields.settings : current.settings,
       rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : current.rolePermissions,
+      posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : current.posShifts,
     };
     dbStateRef.current = nextState;
 
@@ -456,6 +466,7 @@ export default function App() {
     if (updatedFields.auditTrails !== undefined) setAuditTrails(updatedFields.auditTrails);
     if (updatedFields.settings !== undefined) setSettings(updatedFields.settings);
     if (updatedFields.rolePermissions !== undefined) setRolePermissions(updatedFields.rolePermissions);
+    if (updatedFields.posShifts !== undefined) setPosShifts(updatedFields.posShifts);
 
     // 2. Compute local state with optimistic changes
     const freshDataLocal = {
@@ -495,6 +506,7 @@ export default function App() {
           auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : (isCloudNewer ? (cloudData.auditTrails || latestDb.auditTrails) : latestDb.auditTrails),
           settings: updatedFields.settings !== undefined ? updatedFields.settings : (isCloudNewer ? (cloudData.settings || latestDb.settings) : latestDb.settings),
           rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : (isCloudNewer ? (cloudData.rolePermissions || latestDb.rolePermissions) : latestDb.rolePermissions),
+          posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : (isCloudNewer ? (cloudData.posShifts || latestDb.posShifts) : latestDb.posShifts),
           lastUpdated: new Date().toISOString()
         };
 
@@ -516,6 +528,7 @@ export default function App() {
             auditTrails: mergedData.auditTrails,
             settings: mergedData.settings,
             rolePermissions: mergedData.rolePermissions,
+            posShifts: mergedData.posShifts,
           };
 
           if (updatedFields.companies === undefined && cloudData.companies) setCompanies(cloudData.companies);
@@ -533,6 +546,7 @@ export default function App() {
           if (updatedFields.auditTrails === undefined && cloudData.auditTrails) setAuditTrails(cloudData.auditTrails);
           if (updatedFields.settings === undefined && cloudData.settings) setSettings(cloudData.settings);
           if (updatedFields.rolePermissions === undefined && cloudData.rolePermissions) setRolePermissions(cloudData.rolePermissions);
+          if (updatedFields.posShifts === undefined && cloudData.posShifts) setPosShifts(cloudData.posShifts);
         }
       }
 
@@ -622,6 +636,989 @@ export default function App() {
       alert('Database Backup Downloaded Successfully! You can find it in your downloads folder.');
     } catch (err) {
       alert('Failed to export database: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleExportHTML = () => {
+    try {
+      const currentData = {
+        companies,
+        branches,
+        stores,
+        users,
+        categories,
+        taxes,
+        suppliers,
+        customers,
+        stockItems,
+        purchaseOrders,
+        salesOrders,
+        expenses,
+        auditTrails,
+        settings,
+        rolePermissions,
+        exportedAt: new Date().toISOString()
+      };
+
+      const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Global Tradecore ERP - Interactive Offline Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    @media print {
+      header, aside, button, select, input {
+        display: none !important;
+      }
+      main {
+        padding: 0 !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 flex flex-col min-h-screen">
+
+  <!-- HEADER -->
+  <header class="bg-slate-900 text-white border-b border-slate-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-40 shadow-md">
+    <div class="flex items-center gap-3">
+      <div class="p-2 bg-blue-600 rounded-lg text-white">
+        <i data-lucide="layout-dashboard" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight">TradeCore ERP Portal</h1>
+        <p class="text-xs text-slate-400 font-medium font-mono">Offline Database View & Interactive Reports</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="text-right hidden sm:block">
+        <p class="text-xs text-slate-400 font-semibold">Active Company</p>
+        <p class="text-sm font-bold text-blue-400" id="header-company-name">Global Tradecore</p>
+      </div>
+      <button onclick="window.print()" class="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 border border-slate-700 transition shadow-xs">
+        <i data-lucide="printer" class="w-3.5 h-3.5"></i> Print Page
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 flex-col md:flex-row">
+    <!-- SIDEBAR NAVIGATION -->
+    <aside class="w-full md:w-64 bg-slate-900 text-slate-300 border-r border-slate-800 flex flex-col justify-between">
+      <nav class="p-4 space-y-1">
+        <button onclick="switchTab('dashboard')" id="btn-dashboard" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition bg-blue-600 text-white">
+          <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Dashboard
+        </button>
+        <button onclick="switchTab('products')" id="btn-products" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="package" class="w-4 h-4"></i> Stock Items
+        </button>
+        <button onclick="switchTab('sales')" id="btn-sales" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="shopping-cart" class="w-4 h-4"></i> Sales Ledgers
+        </button>
+        <button onclick="switchTab('purchases')" id="btn-purchases" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="receipt" class="w-4 h-4"></i> Purchase Orders
+        </button>
+        <button onclick="switchTab('expenses')" id="btn-expenses" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="dollar-sign" class="w-4 h-4"></i> Expenses
+        </button>
+        <button onclick="switchTab('contacts')" id="btn-contacts" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="users" class="w-4 h-4"></i> Customers & Suppliers
+        </button>
+        <button onclick="switchTab('logs')" id="btn-logs" class="nav-btn w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition hover:bg-slate-800 hover:text-white">
+          <i data-lucide="file-text" class="w-4 h-4"></i> Audit Trails
+        </button>
+      </nav>
+      <div class="p-4 border-t border-slate-800 text-[10px] text-slate-500 font-semibold space-y-1 bg-slate-950">
+        <p>Export Date: <span id="footer-export-date"></span></p>
+        <p>License Status: ACTIVE (OFFLINE)</p>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTAINER -->
+    <main class="flex-1 p-6 md:p-8 overflow-y-auto">
+      
+      <!-- ================= DASHBOARD TAB ================= -->
+      <section id="tab-dashboard" class="tab-content space-y-6">
+        <div class="border-b pb-4">
+          <h2 class="text-xl font-bold text-slate-900 tracking-tight">Executive Dashboard</h2>
+          <p class="text-xs text-slate-500 font-medium">Real-time summaries calculated from the active offline backup.</p>
+        </div>
+
+        <!-- KPI CARDS -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-white p-5 rounded-xl border shadow-xs flex items-center gap-4">
+            <div class="p-3 bg-blue-50 text-blue-600 rounded-lg">
+              <i data-lucide="dollar-sign" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Revenue</p>
+              <h3 class="text-lg font-bold text-slate-900 mt-0.5" id="kpi-sales-total">$0.00</h3>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border shadow-xs flex items-center gap-4">
+            <div class="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
+              <i data-lucide="package" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Inventory Value</p>
+              <h3 class="text-lg font-bold text-slate-900 mt-0.5" id="kpi-inventory-value">$0.00</h3>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border shadow-xs flex items-center gap-4">
+            <div class="p-3 bg-amber-50 text-amber-600 rounded-lg">
+              <i data-lucide="receipt" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Stock SKU Count</p>
+              <h3 class="text-lg font-bold text-slate-900 mt-0.5" id="kpi-sku-count">0 Items</h3>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border shadow-xs flex items-center gap-4">
+            <div class="p-3 bg-rose-50 text-rose-600 rounded-lg">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Expenses</p>
+              <h3 class="text-lg font-bold text-slate-900 mt-0.5" id="kpi-expenses-total">$0.00</h3>
+            </div>
+          </div>
+        </div>
+
+        <!-- RECENT ACTIVITY AND NOTIFICATIONS -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-2 bg-white rounded-xl border shadow-xs p-5 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <i data-lucide="calendar" class="w-4 h-4 text-blue-600"></i> Recent Sales Orders
+            </h3>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr class="bg-slate-50 border-b">
+                    <th class="p-2.5 font-bold text-slate-600">Order ID</th>
+                    <th class="p-2.5 font-bold text-slate-600">Customer</th>
+                    <th class="p-2.5 font-bold text-slate-600">Date</th>
+                    <th class="p-2.5 font-bold text-slate-600 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="recent-sales-tbody">
+                  <!-- JS Injection -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-xl border shadow-xs p-5 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-500"></i> Stock Level Warning
+            </h3>
+            <div class="space-y-2 max-h-[220px] overflow-y-auto" id="low-stock-list">
+              <!-- JS Low stock item cards -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= PRODUCTS TAB ================= -->
+      <section id="tab-products" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight">Active Stock & Inventory</h2>
+            <p class="text-xs text-slate-500 font-medium">Browse, search, and audit your stock counts and valuations.</p>
+          </div>
+          <div class="flex items-center gap-2 w-full sm:w-auto">
+            <div class="relative flex-1 sm:w-64">
+              <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                <i data-lucide="search" class="w-4 h-4"></i>
+              </span>
+              <input type="text" id="search-products" onkeyup="filterProducts()" placeholder="Search Code, Name, Category..." class="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white shadow-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden font-medium">
+            </div>
+            <select id="filter-products-category" onchange="filterProducts()" class="py-1.5 px-3 border border-slate-200 rounded-lg text-xs bg-white shadow-xs focus:outline-hidden font-medium">
+              <option value="">All Categories</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border shadow-xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-50 text-slate-600 font-bold border-b">
+                  <th class="p-3">SKU Code</th>
+                  <th class="p-3">Product Description</th>
+                  <th class="p-3">Category</th>
+                  <th class="p-3">Branch / Store</th>
+                  <th class="p-3 text-right">In-Stock Qty</th>
+                  <th class="p-3 text-right">Selling Price</th>
+                  <th class="p-3 text-right">Total Value</th>
+                  <th class="p-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody id="products-tbody" class="divide-y divide-slate-100 font-medium text-slate-700">
+                <!-- JS Injection -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SALES TAB ================= -->
+      <section id="tab-sales" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight">Sales Orders & Receipts</h2>
+            <p class="text-xs text-slate-500 font-medium">View completed checkout ledgers and generate printable receipts.</p>
+          </div>
+          <div class="relative w-full sm:w-72">
+            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+              <i data-lucide="search" class="w-4 h-4"></i>
+            </span>
+            <input type="text" id="search-sales" onkeyup="filterSales()" placeholder="Search Invoice #, Customer, Date..." class="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white shadow-xs focus:outline-hidden font-medium">
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border shadow-xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-50 text-slate-600 font-bold border-b">
+                  <th class="p-3">Invoice Number</th>
+                  <th class="p-3">Date &amp; Time</th>
+                  <th class="p-3">Customer</th>
+                  <th class="p-3">Branch Layout</th>
+                  <th class="p-3">Operator</th>
+                  <th class="p-3 text-right">Items Count</th>
+                  <th class="p-3 text-right">Total Amount</th>
+                  <th class="p-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="sales-tbody" class="divide-y divide-slate-100 font-medium text-slate-700">
+                <!-- JS Injection -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= PURCHASES TAB ================= -->
+      <section id="tab-purchases" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight">Purchase Orders (PO)</h2>
+            <p class="text-xs text-slate-500 font-medium">Review vendor supplies, inventory acquisitions, and ledger items.</p>
+          </div>
+          <div class="relative w-full sm:w-72">
+            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+              <i data-lucide="search" class="w-4 h-4"></i>
+            </span>
+            <input type="text" id="search-purchases" onkeyup="filterPurchases()" placeholder="Search PO #, Supplier, Code..." class="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white shadow-xs focus:outline-hidden font-medium">
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border shadow-xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-50 text-slate-600 font-bold border-b">
+                  <th class="p-3">PO Number</th>
+                  <th class="p-3">Creation Date</th>
+                  <th class="p-3">Supplier Name</th>
+                  <th class="p-3">Branch Target</th>
+                  <th class="p-3 text-right">Subtotal</th>
+                  <th class="p-3 text-right">Tax Amount</th>
+                  <th class="p-3 text-right">Grand Total</th>
+                  <th class="p-3 text-center">Receipt Status</th>
+                  <th class="p-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="purchases-tbody" class="divide-y divide-slate-100 font-medium text-slate-700">
+                <!-- JS Injection -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= EXPENSES TAB ================= -->
+      <section id="tab-expenses" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight">System Expenses</h2>
+            <p class="text-xs text-slate-500 font-medium">Review operational overhead, utility expenditures, and rent files.</p>
+          </div>
+          <div class="relative w-full sm:w-72">
+            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+              <i data-lucide="search" class="w-4 h-4"></i>
+            </span>
+            <input type="text" id="search-expenses" onkeyup="filterExpenses()" placeholder="Search Reference, Category, Notes..." class="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white shadow-xs focus:outline-hidden font-medium">
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border shadow-xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr class="bg-slate-50 text-slate-600 font-bold border-b">
+                  <th class="p-3">Expense Code</th>
+                  <th class="p-3">Billing Date</th>
+                  <th class="p-3">Category</th>
+                  <th class="p-3">Notes &amp; Description</th>
+                  <th class="p-3">Assigned Operator</th>
+                  <th class="p-3 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="expenses-tbody" class="divide-y divide-slate-100 font-medium text-slate-700">
+                <!-- JS Injection -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CONTACTS TAB ================= -->
+      <section id="tab-contacts" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4">
+          <h2 class="text-xl font-bold text-slate-900 tracking-tight">Suppliers &amp; Customers Directory</h2>
+          <p class="text-xs text-slate-500 font-medium">Offline directory of all contact records, email handles, and geographical hubs.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <!-- CUSTOMERS CARD -->
+          <div class="bg-white rounded-xl border shadow-xs p-5 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-1.5 border-b pb-2">
+              <i data-lucide="users" class="w-4 h-4 text-blue-600"></i> Registered Customers
+            </h3>
+            <div class="overflow-y-auto max-h-[400px] space-y-2" id="customers-list">
+              <!-- JS Customer List -->
+            </div>
+          </div>
+
+          <!-- SUPPLIERS CARD -->
+          <div class="bg-white rounded-xl border shadow-xs p-5 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-1.5 border-b pb-2">
+              <i data-lucide="truck" class="w-4 h-4 text-emerald-600"></i> Active Suppliers
+            </h3>
+            <div class="overflow-y-auto max-h-[400px] space-y-2" id="suppliers-list">
+              <!-- JS Supplier List -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= AUDIT LOGS TAB ================= -->
+      <section id="tab-logs" class="tab-content hidden space-y-6">
+        <div class="border-b pb-4 flex items-center justify-between">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight">Operational Audit Trails</h2>
+            <p class="text-xs text-slate-500 font-medium">Chronological registry of platform operations and data mutations.</p>
+          </div>
+          <span class="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold font-mono">SECURE CHRONO</span>
+        </div>
+
+        <div class="bg-slate-900 text-slate-300 rounded-xl p-4 font-mono text-xs overflow-x-auto max-h-[500px] overflow-y-auto space-y-2 border border-slate-800 shadow-lg" id="logs-container">
+          <!-- JS Logs Injection -->
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- DETAILS MODALS -->
+  <div id="modal-backdrop" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 hidden">
+    <div class="bg-white rounded-xl max-w-2xl w-full shadow-2xl border flex flex-col max-h-[90vh] overflow-hidden transform scale-95 transition-transform duration-200" id="modal-container">
+      <div class="p-4 border-b flex justify-between items-center bg-slate-50">
+        <h3 class="text-sm font-bold text-slate-900" id="modal-title">Receipt Details</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="p-6 overflow-y-auto text-xs" id="modal-body">
+        <!-- JS Injection -->
+      </div>
+      <div class="p-4 border-t bg-slate-50 flex justify-end gap-2">
+        <button onclick="printModal()" class="py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg flex items-center gap-1.5 transition">
+          <i data-lucide="printer" class="w-3.5 h-3.5"></i> Print Receipt
+        </button>
+        <button onclick="closeModal()" class="py-1.5 px-3 border hover:bg-slate-100 text-slate-700 font-bold rounded-lg transition">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMBEDDED REAL SYSTEM DATA -->
+  <script id="system-data" type="application/json">
+    ${JSON.stringify(currentData)}
+  </script>
+
+  <!-- PORTAL OPERATIONS SCRIPT -->
+  <script>
+    // Load embedded system data safely
+    const DATA = JSON.parse(document.getElementById('system-data').textContent);
+    console.log('[Offline Portal] Loaded Data:', DATA);
+
+    // Populate metadata
+    document.getElementById('header-company-name').textContent = DATA.companies[0]?.name || 'Global Tradecore';
+    document.getElementById('footer-export-date').textContent = new Date(DATA.exportedAt || Date.now()).toLocaleString();
+
+    // Helper: format money with user's settings
+    const currencySym = DATA.settings?.currency === 'TZS' ? 'TSh' : '$';
+    function fmtMoney(usdVal) {
+      if (DATA.settings?.currency === 'TZS') {
+        const rate = DATA.settings?.exchangeRate || 2500;
+        const val = Math.round(usdVal * rate);
+        return val.toLocaleString() + ' ' + currencySym;
+      }
+      return currencySym + usdVal.toFixed(2);
+    }
+
+    // Tab switching engine
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.getElementById('tab-' + tabId).classList.remove('hidden');
+
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('bg-blue-600', 'text-white');
+        btn.classList.add('hover:bg-slate-800', 'hover:text-white', 'text-slate-300');
+      });
+      const activeBtn = document.getElementById('btn-' + tabId);
+      if (activeBtn) {
+        activeBtn.classList.remove('hover:bg-slate-800', 'hover:text-white', 'text-slate-300');
+        activeBtn.classList.add('bg-blue-600', 'text-white');
+      }
+      window.scrollTo(0, 0);
+    }
+
+    // 1. Render Dashboard Tab
+    function renderDashboard() {
+      // KPIs
+      let totalSales = 0;
+      DATA.salesOrders.filter(so => so.active !== false).forEach(so => totalSales += (so.grandTotal || 0));
+      document.getElementById('kpi-sales-total').textContent = fmtMoney(totalSales);
+
+      let totalInvVal = 0;
+      DATA.stockItems.filter(p => p.active !== false).forEach(p => totalInvVal += ((p.qty || 0) * (p.costPrice || p.price || 0)));
+      document.getElementById('kpi-inventory-value').textContent = fmtMoney(totalInvVal);
+
+      const itemsCount = DATA.stockItems.filter(p => p.active !== false).length;
+      document.getElementById('kpi-sku-count').textContent = itemsCount + ' SKU Items';
+
+      let totalExp = 0;
+      DATA.expenses.forEach(e => totalExp += (e.usdAmount || 0));
+      document.getElementById('kpi-expenses-total').textContent = fmtMoney(totalExp);
+
+      // Recent Sales list
+      const recentSales = DATA.salesOrders.filter(so => so.active !== false).slice(0, 5);
+      const recentTbody = document.getElementById('recent-sales-tbody');
+      recentTbody.innerHTML = '';
+      if (recentSales.length === 0) {
+        recentTbody.innerHTML = '<tr><td colspan="4" class="p-3 text-slate-400 text-center font-medium">No sales recorded</td></tr>';
+      } else {
+        recentSales.forEach(so => {
+          recentTbody.innerHTML += \`
+            <tr class="border-b border-slate-100 hover:bg-slate-50/50">
+              <td class="p-2.5 font-semibold text-blue-600 cursor-pointer" onclick="viewSalesDetail('\${so.soNumber}')">\${so.soNumber}</td>
+              <td class="p-2.5 font-medium text-slate-700">\${so.customerName || 'Walk-in Customer'}</td>
+              <td class="p-2.5 text-slate-400 font-medium">\${new Date(so.date).toLocaleDateString()}</td>
+              <td class="p-2.5 text-right font-bold text-slate-900">\${fmtMoney(so.grandTotal)}</td>
+            </tr>
+          \`;
+        });
+      }
+
+      // Low Stock warning list
+      const lowStockItems = DATA.stockItems.filter(p => p.active !== false && (p.qty || 0) <= (p.minStock || 5));
+      const lowStockList = document.getElementById('low-stock-list');
+      lowStockList.innerHTML = '';
+      if (lowStockItems.length === 0) {
+        lowStockList.innerHTML = '<div class="p-3 text-emerald-600 bg-emerald-50 rounded-lg text-center font-bold text-xs">All inventory counts healthy</div>';
+      } else {
+        lowStockItems.slice(0, 10).forEach(p => {
+          lowStockList.innerHTML += \`
+            <div class="p-2.5 border rounded-lg bg-amber-50/30 flex items-center justify-between text-xs font-semibold">
+              <div class="min-w-0 pr-2">
+                <p class="text-slate-900 font-bold truncate">\${p.name}</p>
+                <p class="text-slate-400 text-[10px]">\${p.code}</p>
+              </div>
+              <div class="text-right flex-shrink-0">
+                <span class="px-2 py-0.5 bg-rose-100 text-rose-700 rounded-full font-bold text-[10px]">\${p.qty} left</span>
+                <p class="text-[9px] text-slate-400 mt-0.5">Min level: \${p.minStock || 5}</p>
+              </div>
+            </div>
+          \`;
+        });
+      }
+    }
+
+    // 2. Render Products Tab
+    function renderProducts() {
+      // Fill Category filter options
+      const catFilter = document.getElementById('filter-products-category');
+      catFilter.innerHTML = '<option value="">All Categories</option>';
+      (DATA.categories || []).forEach(c => {
+        catFilter.innerHTML += \`<option value="\${c}">\${c}</option>\`;
+      });
+
+      const tbody = document.getElementById('products-tbody');
+      tbody.innerHTML = '';
+      
+      const filteredItems = DATA.stockItems.filter(p => p.active !== false);
+      if (filteredItems.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="p-6 text-slate-400 text-center font-medium">No items registered</td></tr>';
+        return;
+      }
+
+      filteredItems.forEach(p => {
+        const isLow = (p.qty || 0) <= (p.minStock || 5);
+        const val = (p.qty || 0) * (p.price || 0);
+        tbody.innerHTML += \`
+          <tr class="hover:bg-slate-50/50 product-row border-b" data-name="\${(p.name || '').toLowerCase()}" data-code="\${(p.code || '').toLowerCase()}" data-cat="\${(p.category || '').toLowerCase()}">
+            <td class="p-3 font-mono font-bold text-slate-900">\${p.code}</td>
+            <td class="p-3 font-bold text-slate-700">\${p.name}</td>
+            <td class="p-3 text-slate-500 font-semibold">\${p.category || 'N/A'}</td>
+            <td class="p-3 text-slate-400 font-medium">\${p.branch || 'Main Branch'}</td>
+            <td class="p-3 text-right font-bold \${isLow ? 'text-rose-600 bg-rose-50/50' : 'text-slate-900'}">\${p.qty}</td>
+            <td class="p-3 text-right text-slate-700 font-medium">\${fmtMoney(p.price || 0)}</td>
+            <td class="p-3 text-right text-slate-900 font-bold">\${fmtMoney(val)}</td>
+            <td class="p-3 text-center">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold \${isLow ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}">
+                \${isLow ? 'Low stock' : 'Optimal'}
+              </span>
+            </td>
+          </tr>
+        \`;
+      });
+    }
+
+    function filterProducts() {
+      const q = document.getElementById('search-products').value.toLowerCase();
+      const cat = document.getElementById('filter-products-category').value.toLowerCase();
+      
+      document.querySelectorAll('.product-row').forEach(row => {
+        const rowName = row.getAttribute('data-name');
+        const rowCode = row.getAttribute('data-code');
+        const rowCat = row.getAttribute('data-cat');
+        
+        const matchesSearch = rowName.includes(q) || rowCode.includes(q);
+        const matchesCategory = !cat || rowCat === cat;
+
+        if (matchesSearch && matchesCategory) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+    }
+
+    // 3. Render Sales Tab
+    function renderSales() {
+      const tbody = document.getElementById('sales-tbody');
+      tbody.innerHTML = '';
+      
+      const sales = DATA.salesOrders.filter(so => so.active !== false);
+      if (sales.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="p-6 text-slate-400 text-center font-medium">No sales orders found</td></tr>';
+        return;
+      }
+
+      sales.forEach(so => {
+        tbody.innerHTML += \`
+          <tr class="hover:bg-slate-50/50 sales-row border-b" data-invoice="\${so.soNumber.toLowerCase()}" data-cust="\${(so.customerName || 'walk-in').toLowerCase()}">
+            <td class="p-3 font-mono font-bold text-blue-600 cursor-pointer" onclick="viewSalesDetail('\${so.soNumber}')">\${so.soNumber}</td>
+            <td class="p-3 text-slate-500 font-medium">\${new Date(so.date).toLocaleString()}</td>
+            <td class="p-3 font-bold text-slate-700">\${so.customerName || 'Walk-in Customer'}</td>
+            <td class="p-3 text-slate-400 font-medium">\${so.branch || 'Main Branch'}</td>
+            <td class="p-3 text-slate-500 font-semibold">\${so.operator || 'Root User'}</td>
+            <td class="p-3 text-right font-medium text-slate-600">\${so.items?.length || 0} items</td>
+            <td class="p-3 text-right font-bold text-slate-900">\${fmtMoney(so.grandTotal)}</td>
+            <td class="p-3 text-center">
+              <button onclick="viewSalesDetail('\${so.soNumber}')" class="py-1 px-2.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg hover:bg-blue-100 text-[10px] font-bold transition">
+                View Receipt
+              </button>
+            </td>
+          </tr>
+        \`;
+      });
+    }
+
+    function filterSales() {
+      const q = document.getElementById('search-sales').value.toLowerCase();
+      document.querySelectorAll('.sales-row').forEach(row => {
+        const inv = row.getAttribute('data-invoice');
+        const cust = row.getAttribute('data-cust');
+        if (inv.includes(q) || cust.includes(q)) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+    }
+
+    // 4. Render Purchases Tab
+    function renderPurchases() {
+      const tbody = document.getElementById('purchases-tbody');
+      tbody.innerHTML = '';
+      
+      const purchases = DATA.purchaseOrders.filter(po => po.active !== false);
+      if (purchases.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="p-6 text-slate-400 text-center font-medium">No purchase records found</td></tr>';
+        return;
+      }
+
+      purchases.forEach(po => {
+        const isRec = po.status === 'Received';
+        tbody.innerHTML += \`
+          <tr class="hover:bg-slate-50/50 purchase-row border-b" data-po="\${po.poNumber.toLowerCase()}" data-supplier="\${(po.supplierName || '').toLowerCase()}">
+            <td class="p-3 font-mono font-bold text-emerald-600 cursor-pointer" onclick="viewPurchaseDetail('\${po.poNumber}')">\${po.poNumber}</td>
+            <td class="p-3 text-slate-500 font-medium">\${new Date(po.date).toLocaleDateString()}</td>
+            <td class="p-3 font-bold text-slate-700">\${po.supplierName || 'General Supplier'}</td>
+            <td class="p-3 text-slate-400 font-medium">\${po.branch || 'Main Branch'}</td>
+            <td class="p-3 text-right text-slate-600 font-medium">\${fmtMoney(po.subtotal)}</td>
+            <td class="p-3 text-right text-slate-600 font-medium">\${fmtMoney(po.taxTotal || 0)}</td>
+            <td class="p-3 text-right font-bold text-slate-900">\${fmtMoney(po.grandTotal)}</td>
+            <td class="p-3 text-center">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold \text-[10px] \${isRec ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
+                \${po.status}
+              </span>
+            </td>
+            <td class="p-3 text-center">
+              <button onclick="viewPurchaseDetail('\${po.poNumber}')" class="py-1 px-2.5 bg-slate-50 text-slate-600 border rounded-lg hover:bg-slate-100 text-[10px] font-bold transition">
+                View Ledger
+              </button>
+            </td>
+          </tr>
+        \`;
+      });
+    }
+
+    function filterPurchases() {
+      const q = document.getElementById('search-purchases').value.toLowerCase();
+      document.querySelectorAll('.purchase-row').forEach(row => {
+        const po = row.getAttribute('data-po');
+        const supplier = row.getAttribute('data-supplier');
+        if (po.includes(q) || supplier.includes(q)) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+    }
+
+    // 5. Render Expenses Tab
+    function renderExpenses() {
+      const tbody = document.getElementById('expenses-tbody');
+      tbody.innerHTML = '';
+      
+      const expenses = DATA.expenses || [];
+      if (expenses.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="p-6 text-slate-400 text-center font-medium">No expenses registered</td></tr>';
+        return;
+      }
+
+      expenses.forEach(e => {
+        tbody.innerHTML += \`
+          <tr class="hover:bg-slate-50/50 expense-row border-b" data-desc="\${(e.description || '').toLowerCase()}" data-cat="\${(e.category || '').toLowerCase()}" data-code="\${(e.expenseNumber || '').toLowerCase()}">
+            <td class="p-3 font-mono font-bold text-rose-600">\${e.expenseNumber}</td>
+            <td class="p-3 text-slate-500 font-medium">\${new Date(e.date).toLocaleDateString()}</td>
+            <td class="p-3 text-slate-800 font-bold">\${e.category}</td>
+            <td class="p-3 text-slate-500 font-medium max-w-xs truncate">\${e.description}</td>
+            <td class="p-3 text-slate-400 font-medium">\${e.operator || 'System User'}</td>
+            <td class="p-3 text-right font-bold text-rose-600">\${fmtMoney(e.usdAmount)}</td>
+          </tr>
+        \`;
+      });
+    }
+
+    function filterExpenses() {
+      const q = document.getElementById('search-expenses').value.toLowerCase();
+      document.querySelectorAll('.expense-row').forEach(row => {
+        const desc = row.getAttribute('data-desc');
+        const cat = row.getAttribute('data-cat');
+        const code = row.getAttribute('data-code');
+        if (desc.includes(q) || cat.includes(q) || code.includes(q)) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+    }
+
+    // 6. Render Contacts Tab
+    function renderContacts() {
+      const custDiv = document.getElementById('customers-list');
+      custDiv.innerHTML = '';
+      const customers = DATA.customers || [];
+      if (customers.length === 0) {
+        custDiv.innerHTML = '<p class="text-center text-slate-400 py-4 font-semibold">No customer records</p>';
+      } else {
+        customers.forEach(c => {
+          custDiv.innerHTML += \`
+            <div class="p-3 border rounded-lg bg-slate-50/50 flex items-start gap-3">
+              <div class="p-2 bg-blue-100 text-blue-700 rounded-full flex-shrink-0">
+                <i data-lucide="user" class="w-4 h-4"></i>
+              </div>
+              <div class="min-w-0">
+                <p class="font-bold text-slate-800 text-xs">\${c.name}</p>
+                <p class="text-[10px] text-slate-400 font-medium mt-0.5">Phone: \${c.phone || 'N/A'} | Code: \${c.id}</p>
+                <p class="text-[10px] text-slate-400 font-medium">Location: \${c.address || 'N/A'}</p>
+              </div>
+            </div>
+          \`;
+        });
+      }
+
+      const suppDiv = document.getElementById('suppliers-list');
+      suppDiv.innerHTML = '';
+      const suppliers = DATA.suppliers || [];
+      if (suppliers.length === 0) {
+        suppDiv.innerHTML = '<p class="text-center text-slate-400 py-4 font-semibold">No suppliers registered</p>';
+      } else {
+        suppliers.forEach(s => {
+          suppDiv.innerHTML += \`
+            <div class="p-3 border rounded-lg bg-emerald-50/20 flex items-start gap-3">
+              <div class="p-2 bg-emerald-100 text-emerald-700 rounded-full flex-shrink-0">
+                <i data-lucide="truck" class="w-4 h-4"></i>
+              </div>
+              <div class="min-w-0">
+                <p class="font-bold text-slate-800 text-xs">\${s.name}</p>
+                <p class="text-[10px] text-slate-400 font-medium mt-0.5">Phone: \${s.phone || 'N/A'} | Contact: \${s.contactPerson || 'N/A'}</p>
+                <p class="text-[10px] text-slate-400 font-medium">Hub: \${s.address || 'N/A'}</p>
+              </div>
+            </div>
+          \`;
+        });
+      }
+    }
+
+    // 7. Render Logs Tab
+    function renderLogs() {
+      const logsContainer = document.getElementById('logs-container');
+      logsContainer.innerHTML = '';
+      const logs = DATA.auditTrails || [];
+      if (logs.length === 0) {
+        logsContainer.innerHTML = '<p class="text-slate-500 font-bold">No event logs recorded in system database.</p>';
+      } else {
+        logs.forEach(log => {
+          logsContainer.innerHTML += \`
+            <div class="py-1.5 border-b border-slate-800/80 last:border-0 leading-relaxed">
+              <span class="text-slate-500">[\${new Date(log.timestamp).toLocaleString()}]</span> 
+              <span class="text-amber-400 font-bold">\${log.operator || 'SYSTEM'}:</span> 
+              <span class="text-slate-100 font-semibold">\${log.action}</span> - 
+              <span class="text-slate-400">\${log.details}</span>
+            </div>
+          \`;
+        });
+      }
+    }
+
+    // Modal Manager
+    function showModal(title, bodyHtml) {
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-body').innerHTML = bodyHtml;
+      document.getElementById('modal-backdrop').classList.remove('hidden');
+      setTimeout(() => {
+        document.getElementById('modal-container').classList.remove('scale-95');
+      }, 10);
+      lucide.createIcons();
+    }
+
+    function closeModal() {
+      document.getElementById('modal-container').classList.add('scale-95');
+      setTimeout(() => {
+        document.getElementById('modal-backdrop').classList.add('hidden');
+      }, 150);
+    }
+
+    function printModal() {
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(\`
+        <html>
+        <head>
+          <title>Print Document</title>
+          <style>
+            body { font-family: 'Inter', sans-serif; padding: 40px; font-size: 14px; color: #333; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; }
+            th { background-color: #f9f9f9; font-weight: bold; }
+            .text-right { text-align: right; }
+            .font-bold { font-weight: bold; }
+            .invoice-header { text-align: center; margin-bottom: 30px; }
+          </style>
+        </head>
+        <body>
+          \${document.getElementById('modal-body').innerHTML}
+        </body>
+        </html>
+      \`);
+      printWindow.document.close();
+      printWindow.print();
+    }
+
+    function viewSalesDetail(invoiceNum) {
+      const so = DATA.salesOrders.find(o => o.soNumber === invoiceNum);
+      if (!so) return;
+
+      let itemsHtml = '';
+      so.items.forEach(item => {
+        itemsHtml += \`
+          <tr>
+            <td class="py-2 text-slate-800 font-medium">\${item.code} - \${item.name}</td>
+            <td class="py-2 text-right font-semibold text-slate-700">\${item.qty}</td>
+            <td class="py-2 text-right text-slate-600">\${fmtMoney(item.price)}</td>
+            <td class="py-2 text-right font-bold text-slate-900">\${fmtMoney(item.qty * item.price)}</td>
+          </tr>
+        \`;
+      });
+
+      const bodyHtml = \`
+        <div class="text-center border-b pb-4 mb-4">
+          <h2 class="text-lg font-bold text-slate-900">\${DATA.companies[0]?.name || 'Global Tradecore'}</h2>
+          <p class="text-slate-400 font-medium text-xs mt-0.5">Sales Invoice / Checkout Ledger</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 border-b pb-4 mb-4 font-semibold text-slate-600">
+          <div>
+            <p>Invoice #: <span class="font-bold text-slate-900">\${so.soNumber}</span></p>
+            <p>Customer: <span class="font-bold text-slate-900">\${so.customerName || 'Walk-in Customer'}</span></p>
+            <p>Branch Layout: <span class="font-bold text-slate-900">\${so.branch || 'Main Branch'}</span></p>
+          </div>
+          <div class="text-right">
+            <p>Date: <span class="font-bold text-slate-900">\${new Date(so.date).toLocaleString()}</span></p>
+            <p>Cashier ID: <span class="font-bold text-slate-900">\${so.operator || 'Root User'}</span></p>
+            <p>Status: <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold">COMPLETED</span></p>
+          </div>
+        </div>
+        <table class="w-full text-left border-collapse my-4">
+          <thead>
+            <tr class="bg-slate-50 border-b">
+              <th class="py-2 px-1 text-slate-600 font-bold">Product SKU</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Qty</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Selling Price</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Total</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            \${itemsHtml}
+          </tbody>
+        </table>
+        <div class="w-1/2 ml-auto text-right font-semibold text-slate-700 mt-6 space-y-1">
+          <div class="flex justify-between">
+            <span>Subtotal</span>
+            <span>\${fmtMoney(so.subtotal)}</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Tax Amount</span>
+            <span>\${fmtMoney(so.taxTotal || 0)}</span>
+          </div>
+          <div class="flex justify-between text-base font-bold text-slate-900 border-t pt-2 mt-2">
+            <span>Grand Total</span>
+            <span>\${fmtMoney(so.grandTotal)}</span>
+          </div>
+        </div>
+      \`;
+
+      showModal('Sales Invoice Details', bodyHtml);
+    }
+
+    function viewPurchaseDetail(poNum) {
+      const po = DATA.purchaseOrders.find(p => p.poNumber === poNum);
+      if (!po) return;
+
+      let itemsHtml = '';
+      po.items.forEach(item => {
+        itemsHtml += \`
+          <tr>
+            <td class="py-2 text-slate-800 font-medium">\${item.code} - \${item.name}</td>
+            <td class="py-2 text-right font-semibold text-slate-700">\${item.qty}</td>
+            <td class="py-2 text-right text-slate-600">\${fmtMoney(item.costPrice || item.price)}</td>
+            <td class="py-2 text-right font-bold text-slate-900">\${fmtMoney(item.qty * (item.costPrice || item.price))}</td>
+          </tr>
+        \`;
+      });
+
+      const bodyHtml = \`
+        <div class="text-center border-b pb-4 mb-4">
+          <h2 class="text-lg font-bold text-slate-900">\${DATA.companies[0]?.name || 'Global Tradecore'}</h2>
+          <p class="text-slate-400 font-medium text-xs mt-0.5">Purchase Order Ledger</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 border-b pb-4 mb-4 font-semibold text-slate-600">
+          <div>
+            <p>PO Number: <span class="font-bold text-slate-900">\${po.poNumber}</span></p>
+            <p>Supplier Name: <span class="font-bold text-slate-900">\${po.supplierName || 'General Vendor'}</span></p>
+            <p>Target Location: <span class="font-bold text-slate-900">\${po.branch || 'Main Branch'}</span></p>
+          </div>
+          <div class="text-right">
+            <p>Date: <span class="font-bold text-slate-900">\${new Date(po.date).toLocaleDateString()}</span></p>
+            <p>Status: <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold">\${po.status}</span></p>
+          </div>
+        </div>
+        <table class="w-full text-left border-collapse my-4">
+          <thead>
+            <tr class="bg-slate-50 border-b">
+              <th class="py-2 px-1 text-slate-600 font-bold">Acquired SKU</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Ordered Qty</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Purchase Unit Cost</th>
+              <th class="py-2 text-right text-slate-600 font-bold">Total Cost</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            \${itemsHtml}
+          </tbody>
+        </table>
+        <div class="w-1/2 ml-auto text-right font-semibold text-slate-700 mt-6 space-y-1">
+          <div class="flex justify-between">
+            <span>Subtotal Cost</span>
+            <span>\${fmtMoney(po.subtotal)}</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Tax Cost</span>
+            <span>\${fmtMoney(po.taxTotal || 0)}</span>
+          </div>
+          <div class="flex justify-between text-base font-bold text-slate-900 border-t pt-2 mt-2">
+            <span>Grand Total Cost</span>
+            <span>\${fmtMoney(po.grandTotal)}</span>
+          </div>
+        </div>
+      \`;
+
+      showModal('Purchase Order Details', bodyHtml);
+    }
+
+    // Initialize Page
+    renderDashboard();
+    renderProducts();
+    renderSales();
+    renderPurchases();
+    renderExpenses();
+    renderContacts();
+    renderLogs();
+    lucide.createIcons();
+  </script>
+
+</body>
+</html>`;
+
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.href = url;
+      const dateStr = new Date().toISOString().split('T')[0];
+      downloadAnchor.download = `TradeCore_ERP_Offline_Portal_${dateStr}.html`;
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      document.body.removeChild(downloadAnchor);
+      URL.revokeObjectURL(url);
+
+      logAction('Export Offline HTML', 'Downloaded self-contained, interactive HTML web app client.');
+      alert('Interactive HTML File Downloaded Successfully! You can open this file on any device offline to view your reports and logs.');
+    } catch (err) {
+      alert('Failed to generate HTML file: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -925,25 +1922,118 @@ export default function App() {
   // 1. Dashboard Segment
   const renderDashboard = () => {
     const storeId = currentStoreId;
-    const storeStock = (p: StockItem) => p.stock?.[storeId || 1] || 0;
+    const activeStoreIds = storeId ? [storeId] : visibleStores.map(s => s.id);
+    
+    const storeStock = (p: StockItem) => {
+      if (storeId) {
+        return p.stock?.[storeId] || 0;
+      }
+      return activeStoreIds.reduce((sum, sId) => sum + (p.stock?.[sId] || 0), 0);
+    };
     
     const totalStockValue = activeStockItems.reduce((acc, p) => acc + storeStock(p) * p.purchasePrice, 0);
-    const lowStockItems = activeStockItems.filter(p => storeStock(p) <= p.lowStockQty);
+    const lowStockItems = activeStockItems.filter(p => {
+      if (storeId) {
+        return (p.stock?.[storeId] || 0) <= p.lowStockQty;
+      } else {
+        return activeStoreIds.some(sId => (p.stock?.[sId] || 0) <= p.lowStockQty) || activeStoreIds.length === 0;
+      }
+    });
     const lowStockCount = lowStockItems.length;
 
     const todayStr = new Date().toISOString().split('T')[0];
     const todaySalesAmt = activeSalesOrders
-      .filter(so => so.date === todayStr && (storeId ? so.storeId === storeId : true))
+      .filter(so => so.date === todayStr && activeStoreIds.includes(so.storeId))
       .reduce((acc, so) => acc + so.total, 0);
 
     const todayPurchasesAmt = activePurchaseOrders
-      .filter(po => po.date === todayStr && po.status === 'Received' && (storeId ? po.storeId === storeId : true))
+      .filter(po => po.date === todayStr && po.status === 'Received' && activeStoreIds.includes(po.storeId))
       .reduce((acc, po) => acc + po.total, 0);
 
     const receivables = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
     const payables = activePurchaseOrders
-      .filter(po => po.status === 'Pending' && (storeId ? po.storeId === storeId : true))
+      .filter(po => po.status === 'Pending' && activeStoreIds.includes(po.storeId))
       .reduce((sum, po) => sum + po.total, 0);
+
+    const todayMs = new Date(todayStr).getTime();
+    const expiryAlerts: Array<{
+      product: StockItem;
+      storeName: string;
+      expiryDate: string;
+      daysRemaining: number;
+      status: 'expired' | 'critical' | 'warning' | 'safe';
+    }> = [];
+
+    activeStockItems.forEach(p => {
+      activeStoreIds.forEach(sId => {
+        const qty = p.stock?.[sId] || 0;
+        if (qty > 0) {
+          const expDate = p.expiryDates?.[sId] || p.expiryDate;
+          if (expDate) {
+            const expMs = new Date(expDate).getTime();
+            const daysRemaining = Math.ceil((expMs - todayMs) / (1000 * 60 * 60 * 24));
+            const status = daysRemaining < 0 ? 'expired' : daysRemaining <= 7 ? 'critical' : daysRemaining <= 30 ? 'warning' : 'safe';
+            if (status !== 'safe') {
+              const storeObj = visibleStores.find(s => s.id === sId);
+              expiryAlerts.push({
+                product: p,
+                storeName: storeObj ? storeObj.name : `Store #${sId}`,
+                expiryDate: expDate,
+                daysRemaining,
+                status: status as 'expired' | 'critical' | 'warning' | 'safe'
+              });
+            }
+          }
+        }
+      });
+    });
+
+    expiryAlerts.sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    // Prepare daily sales chart data for the last 15 days
+    const last15Days = Array.from({ length: 15 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      return d.toISOString().split('T')[0];
+    }).reverse();
+
+    const dailySalesData = last15Days.map(date => {
+      const sales = activeSalesOrders
+        .filter(so => so.date === date && (storeId ? so.storeId === storeId : true))
+        .reduce((sum, so) => sum + so.total, 0);
+      const profit = activeSalesOrders
+        .filter(so => so.date === date && (storeId ? so.storeId === storeId : true))
+        .reduce((sum, so) => sum + so.profit, 0);
+      return {
+        date: date.substring(5), // MM-DD
+        Sales: sales,
+        Profit: profit
+      };
+    });
+
+    // Prepare top 5 products by stock value
+    const topProductsStockValue = [...activeStockItems]
+      .map(p => ({
+        name: p.name.length > 15 ? p.name.slice(0, 15) + '...' : p.name,
+        value: storeStock(p) * p.purchasePrice
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5);
+
+    // Prepare category expense distribution
+    const expenseCategoryTotals: Record<string, number> = {};
+    activeExpenses
+      .filter(ex => (storeId ? ex.storeId === storeId : true))
+      .forEach(ex => {
+        expenseCategoryTotals[ex.category] = (expenseCategoryTotals[ex.category] || 0) + ex.amount;
+      });
+
+    const expenseCategoryData = Object.keys(expenseCategoryTotals).map(cat => ({
+      name: cat,
+      value: expenseCategoryTotals[cat]
+    }));
+
+    const COLORS = ['#c41e3a', '#1e3a8a', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6'];
 
     const userCompany = companies.find(c => c.id === currentUser?.companyId);
 
@@ -973,14 +2063,67 @@ export default function App() {
           </div>
         )}
 
+        {/* Expiry Alerts Notification Banner */}
+        {expiryAlerts.length > 0 && (
+          <div className="bg-red-50/80 border border-red-100 rounded-2xl p-5 shadow-xs animate-fade-in no-print">
+            <div className="flex flex-col md:flex-row items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                <ShieldAlert className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-bold text-red-900 mb-1 flex items-center gap-1.5">
+                  {t('Product Expiration Alerts')}
+                  <span className="px-2 py-0.5 text-[10px] font-extrabold bg-red-600 text-white rounded-full uppercase">
+                    {expiryAlerts.length} {t('Items')}
+                  </span>
+                </h3>
+                <p className="text-xs text-red-700 font-semibold mb-3">
+                  {t('The following registered inventory lines have either crossed their expiry threshold or are within critical 30-day limits.')}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {expiryAlerts.map(alert => {
+                    const isExpired = alert.status === 'expired';
+                    const isCritical = alert.status === 'critical';
+                    return (
+                      <div 
+                        key={`${alert.product.id}-${alert.storeName}`} 
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs font-semibold shadow-xs transition hover:scale-[1.01] ${
+                          isExpired 
+                            ? 'bg-red-100 border-red-200 text-red-950' 
+                            : isCritical 
+                              ? 'bg-amber-100/80 border-amber-200 text-amber-950 animate-pulse' 
+                              : 'bg-orange-50 border-orange-200 text-orange-950'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <span className="font-bold block truncate text-slate-900">{alert.product.name}</span>
+                          <span className="text-[10px] font-mono opacity-80 block uppercase tracking-wider">SKU: {alert.product.code} | {alert.storeName}</span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="block font-black text-[10px] uppercase tracking-wider">
+                            {isExpired 
+                              ? t('EXPIRED') 
+                              : `${alert.daysRemaining} ${t('days left')}`}
+                          </span>
+                          <span className="text-[9px] font-bold opacity-85 block font-mono">{alert.expiryDate}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">TOTAL INVENTORY VALUE</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL INVENTORY VALUE')}</span>
               <span className="text-[26px] font-black text-gray-900 leading-tight">
                 {formatMoney(totalStockValue, settings.currency, settings.exchangeRate)}
               </span>
-              <span className="text-xs text-gray-400 block mt-2 font-semibold">Active store level valuation</span>
+              <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Active store level valuation')}</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center text-brand">
               <Package className="w-5 h-5" />
@@ -989,10 +2132,10 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">LOW STOCK CRITICALS</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('LOW STOCK CRITICALS')}</span>
               <span className="text-[26px] font-black text-red-600 leading-tight">{lowStockCount}</span>
               <span className="text-xs text-amber-500 block mt-2 font-semibold flex items-center gap-1">
-                <AlertCircle className="w-3.5 h-3.5" /> Requires immediate purchase
+                <AlertCircle className="w-3.5 h-3.5" /> {t('Requires immediate purchase')}
               </span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center text-red-500">
@@ -1002,12 +2145,12 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">TODAY'S TURNOVER</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t("TODAY'S TURNOVER")}</span>
               <span className="text-[26px] font-black text-emerald-600 leading-tight">
                 {formatMoney(todaySalesAmt, settings.currency, settings.exchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">
-                Completed checkout registers
+                {t('Completed checkout registers')}
               </span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-500">
@@ -1017,11 +2160,11 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">TODAY'S PURCHASES</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t("TODAY'S PURCHASES")}</span>
               <span className="text-[26px] font-black text-purple-600 leading-tight">
                 {formatMoney(todayPurchasesAmt, settings.currency, settings.exchangeRate)}
               </span>
-              <span className="text-xs text-gray-400 block mt-2 font-semibold">Received PO invoices</span>
+              <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Received PO invoices')}</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-500">
               <ShoppingCart className="w-5 h-5" />
@@ -1030,11 +2173,11 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">TOTAL RECEIVABLES</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL RECEIVABLES')}</span>
               <span className="text-[26px] font-black text-amber-600 leading-tight">
                 {formatMoney(receivables, settings.currency, settings.exchangeRate)}
               </span>
-              <span className="text-xs text-gray-400 block mt-2 font-semibold">Customer outstanding ledger balances</span>
+              <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Customer outstanding ledger balances')}</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500">
               <CreditCard className="w-5 h-5" />
@@ -1043,14 +2186,118 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
             <div>
-              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">TOTAL PAYABLES</span>
+              <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL PAYABLES')}</span>
               <span className="text-[26px] font-black text-indigo-600 leading-tight">
                 {formatMoney(payables, settings.currency, settings.exchangeRate)}
               </span>
-              <span className="text-xs text-gray-400 block mt-2 font-semibold">Unresolved supplier invoices</span>
+              <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Unresolved supplier invoices')}</span>
             </div>
             <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-500">
               <DollarIcon className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* Interactive Visual Analytics Dashboards */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 no-print">
+          {/* Daily Sales & Profit Area Chart */}
+          <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-gray-950 text-sm flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-brand" /> {t('Sales & Profit Trendlines (Last 15 Days)')}
+                </h4>
+                <span className="text-[10px] text-gray-400 font-bold uppercase">{t('Interactive Area Graph')}</span>
+              </div>
+              <div className="h-72 w-full text-xs font-semibold">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={dailySalesData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#c41e3a" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#c41e3a" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
+                    <Legend verticalAlign="top" height={36} iconType="circle" />
+                    <Area type="monotone" dataKey="Sales" name={t('Turnover')} stroke="#c41e3a" strokeWidth={2} fillOpacity={1} fill="url(#colorSales)" />
+                    <Area type="monotone" dataKey="Profit" name={t('Profit')} stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorProfit)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+
+          {/* Expense Breakdown Pie Chart */}
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-gray-950 text-sm flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-purple-600" /> {t('Expense Category Breakdown')}
+                </h4>
+                <span className="text-[10px] text-gray-400 font-bold uppercase">{t('Donut Chart')}</span>
+              </div>
+              <div className="h-72 w-full text-xs font-semibold relative flex items-center justify-center">
+                {expenseCategoryData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={expenseCategoryData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={80}
+                        paddingAngle={4}
+                        dataKey="value"
+                      >
+                        {expenseCategoryData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => formatMoney(value, settings.currency, settings.exchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
+                      <Legend verticalAlign="bottom" height={40} iconType="circle" layout="horizontal" align="center" wrapperStyle={{ fontSize: '10px' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="text-gray-400 text-[11px] font-bold text-center">
+                    {t('No registered expenses to build breakdown visualization.')}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Top Products Inventory Valuation */}
+        <div className="grid grid-cols-1 gap-6 no-print">
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="font-bold text-gray-950 text-sm flex items-center gap-2">
+                <Package className="w-4 h-4 text-amber-500" /> {t('Top Products by Capital Asset Value')}
+              </h4>
+              <span className="text-[10px] text-gray-400 font-bold uppercase">{t('Store Valuation')}</span>
+            </div>
+            <div className="h-64 w-full text-xs font-semibold">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topProductsStockValue} barSize={40}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
+                  <Tooltip formatter={(value: number) => formatMoney(value, settings.currency, settings.exchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
+                  <Bar dataKey="value" name={t('Asset Valuation')} radius={[6, 6, 0, 0]}>
+                    {topProductsStockValue.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
@@ -1089,31 +2336,70 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center gap-2 mb-6 text-red-500 border-b pb-4">
-                <AlertTriangle className="w-5 h-5" />
-                <span className="font-bold text-gray-900 text-sm">Critical Low Stock Alerts</span>
+          <div className="flex flex-col gap-6">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex-1">
+              <div>
+                <div className="flex items-center gap-2 mb-6 text-red-500 border-b pb-4">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span className="font-bold text-gray-900 text-sm">{t('Critical Low Stock Alerts') || 'Critical Low Stock Alerts'}</span>
+                </div>
+                <div className="space-y-4 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin">
+                  {lowStockItems.map(p => (
+                    <div key={p.id} className="flex items-center justify-between border-b border-gray-50 pb-3">
+                      <div>
+                        <span className="font-bold text-gray-900 text-xs block">{p.name}</span>
+                        <span className="text-[10px] font-mono text-gray-400 tracking-wider uppercase mt-0.5">{p.code}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm font-black text-red-600 block">{storeStock(p)}</span>
+                        <span className="text-[9px] text-gray-400 font-semibold block uppercase">limit: {p.lowStockQty}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {lowStockItems.length === 0 && (
+                    <div className="text-center py-10 text-gray-400 font-medium text-xs">
+                      <ShieldCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                      All stock items sufficiently configured.
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1 scrollbar-thin">
-                {lowStockItems.map(p => (
-                  <div key={p.id} className="flex items-center justify-between border-b border-gray-50 pb-3">
-                    <div>
-                      <span className="font-bold text-gray-900 text-xs block">{p.name}</span>
-                      <span className="text-[10px] font-mono text-gray-400 tracking-wider uppercase mt-0.5">{p.code}</span>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex-1">
+              <div>
+                <div className="flex items-center gap-2 mb-6 text-amber-500 border-b pb-4">
+                  <ShieldAlert className="w-5 h-5" />
+                  <span className="font-bold text-gray-900 text-sm">{t('Product Expiration Alerts') || 'Product Expiration Alerts'}</span>
+                </div>
+                <div className="space-y-4 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin">
+                  {expiryAlerts.map(alert => {
+                    const isExpired = alert.status === 'expired';
+                    const isCritical = alert.status === 'critical';
+                    return (
+                      <div key={`${alert.product.id}-${alert.storeName}`} className="flex items-center justify-between border-b border-gray-50 pb-3">
+                        <div>
+                          <span className="font-bold text-gray-900 text-xs block">{alert.product.name}</span>
+                          <span className="text-[10px] font-mono text-gray-400 tracking-wider uppercase mt-0.5">{alert.product.code} | {alert.storeName}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className={`text-xs font-black block uppercase ${
+                            isExpired ? 'text-red-600' : isCritical ? 'text-amber-600' : 'text-orange-500'
+                          }`}>
+                            {isExpired ? t('EXPIRED') : `${alert.daysRemaining} ${t('days left')}`}
+                          </span>
+                          <span className="text-[9px] text-gray-400 font-semibold block font-mono mt-0.5">{alert.expiryDate}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {expiryAlerts.length === 0 && (
+                    <div className="text-center py-10 text-gray-400 font-medium text-xs">
+                      <ShieldCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                      No expiring products in this store.
                     </div>
-                    <div className="text-right">
-                      <span className="text-sm font-black text-red-600 block">{storeStock(p)}</span>
-                      <span className="text-[9px] text-gray-400 font-semibold block uppercase">limit: {p.lowStockQty}</span>
-                    </div>
-                  </div>
-                ))}
-                {lowStockItems.length === 0 && (
-                  <div className="text-center py-10 text-gray-400 font-medium text-xs">
-                    <ShieldCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-                    All stock items sufficiently configured.
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1336,7 +2622,59 @@ export default function App() {
                         </div>
                         <div>
                           <span className="font-bold text-gray-900 block">{p.name}</span>
-                          <span className="text-[10px] font-mono text-gray-400 mt-0.5">{p.code}</span>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span className="text-[10px] font-mono text-gray-400 uppercase">{p.code}</span>
+                            {(() => {
+                              const expiriesToRender: { storeId?: number; storeName?: string; date: string }[] = [];
+                              if (storeId) {
+                                const expD = p.expiryDates?.[storeId] || p.expiryDate;
+                                if (expD) expiriesToRender.push({ storeId, date: expD });
+                              } else {
+                                visibleStores.forEach(s => {
+                                  if ((p.stock?.[s.id] || 0) > 0) {
+                                    const expD = p.expiryDates?.[s.id] || p.expiryDate;
+                                    if (expD) {
+                                      if (!expiriesToRender.some(x => x.date === expD && x.storeId === s.id)) {
+                                        expiriesToRender.push({ storeId: s.id, storeName: s.name, date: expD });
+                                      }
+                                    }
+                                  }
+                                });
+                                if (expiriesToRender.length === 0 && p.expiryDate) {
+                                  expiriesToRender.push({ date: p.expiryDate });
+                                }
+                              }
+
+                              if (expiriesToRender.length === 0) return null;
+
+                              return expiriesToRender.map((exp, idx) => {
+                                const todayStr = new Date().toISOString().split('T')[0];
+                                const todayMs = new Date(todayStr).getTime();
+                                const expMs = new Date(exp.date).getTime();
+                                const daysRemaining = Math.ceil((expMs - todayMs) / (1000 * 60 * 60 * 24));
+                                
+                                let badgeClass = "bg-green-50 text-green-700 border-green-200";
+                                let badgeText = `${daysRemaining} ${t('days left')}`;
+                                if (daysRemaining < 0) {
+                                  badgeClass = "bg-red-50 text-red-700 border-red-200 animate-pulse font-black";
+                                  badgeText = t('EXPIRED');
+                                } else if (daysRemaining <= 7) {
+                                  badgeClass = "bg-red-50 text-red-600 border-red-100 font-extrabold";
+                                  badgeText = `${daysRemaining} ${t('days!')}`;
+                                } else if (daysRemaining <= 30) {
+                                  badgeClass = "bg-amber-50 text-amber-700 border-amber-200 font-bold";
+                                }
+                                
+                                const label = exp.storeName ? `${exp.storeName}: ${badgeText}` : badgeText;
+                                return (
+                                  <span key={idx} className={`text-[9px] px-1.5 py-0.5 rounded border ${badgeClass} flex items-center gap-0.5 whitespace-nowrap mt-1`}>
+                                    <Calendar className="w-2.5 h-2.5 text-current shrink-0" />
+                                    {label} ({exp.date})
+                                  </span>
+                                );
+                              });
+                            })()}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3"><span className="bg-gray-100 px-2 py-1 rounded text-gray-600 text-[10px]">{p.category}</span></td>
@@ -1743,6 +3081,7 @@ export default function App() {
       case 'report-purchase-outstanding':
       case 'report-lowstock':
       case 'report-po-details':
+      case 'report-shifts':
         return (
           <Reports
             currentPage={currentPage}
@@ -1757,6 +3096,7 @@ export default function App() {
             currency={settings.currency}
             exchangeRate={settings.exchangeRate}
             translate={t}
+            posShifts={posShifts}
           />
         );
       case 'user-info':
@@ -2159,6 +3499,12 @@ export default function App() {
                     />
                   </label>
                 </div>
+                <button
+                  onClick={handleExportHTML}
+                  className="w-full py-2 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm"
+                >
+                  <Globe className="w-4 h-4" /> Export Interactive HTML App
+                </button>
                 <div className="text-[9px] text-green-600 bg-green-50/50 p-2 rounded border border-green-100 font-semibold flex items-center gap-1">
                   <CheckCircle className="w-3 h-3 flex-shrink-0" />
                   <span>Dynamic Auto-Saving is fully active in local storage.</span>
@@ -2206,6 +3552,8 @@ export default function App() {
         logAction={logAction}
         settings={settings}
         t={t}
+        currentUser={currentUser}
+        posShifts={posShifts}
       />
 
       {/* PO order Modal */}
@@ -2249,6 +3597,16 @@ export default function App() {
                 const lowLimit = parseInt(fd.get('lowStockQty') as string) || 5;
                 const imageUrl = (fd.get('imageUrl') as string) || '';
 
+                const expiryDate = fd.get('expiryDate') as string || '';
+
+                const expiryDates: Record<number, string> = {};
+                visibleStores.forEach(s => {
+                  const sExpiry = fd.get(`expiryDate_store_${s.id}`) as string;
+                  if (sExpiry) {
+                    expiryDates[s.id] = sExpiry;
+                  }
+                });
+
                 // Adjust rates if in TZS
                 const finalPPrice = settings.currency === 'TZS' ? pPrice / settings.exchangeRate : pPrice;
                 const finalRPrice = settings.currency === 'TZS' ? rPrice / settings.exchangeRate : rPrice;
@@ -2260,7 +3618,8 @@ export default function App() {
                       return {
                         ...p, name, code, category: cat, unit,
                         purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice,
-                        lowStockQty: lowLimit, imageUrl
+                        lowStockQty: lowLimit, imageUrl, expiryDate: expiryDate || undefined,
+                        expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
                       };
                     }
                     return p;
@@ -2276,7 +3635,9 @@ export default function App() {
                     id: maxId + 1, name, code, category: cat, unit,
                     stock: pStockObj,
                     purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice,
-                    lowStockQty: lowLimit, imageUrl
+                    lowStockQty: lowLimit, imageUrl,
+                    expiryDate: expiryDate || undefined,
+                    expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
                   };
                   saveAllData({ stockItems: [...stockItems, newProduct] });
                   logAction('Created Product', `Registered new inventory SKU: ${code}`);
@@ -2412,6 +3773,40 @@ export default function App() {
                   />
                 </div>
               </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-gray-700">Default Expiry Date (Optional)</label>
+                <input
+                  type="date"
+                  name="expiryDate"
+                  defaultValue={editingStockItem?.expiryDate || ''}
+                  className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-sans"
+                />
+              </div>
+
+              {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && visibleStores.length > 0 && (
+                <div className="space-y-2 border border-gray-200 rounded-xl p-3 bg-slate-50/50 mt-3">
+                  <div className="text-[11px] font-bold text-gray-700 tracking-wide uppercase flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-brand" />
+                    {t('Store-Specific Expiry Dates') || 'Store-Specific Expiry Dates'}
+                  </div>
+                  <p className="text-[10px] text-gray-500 font-medium">
+                    {t('Differentiate expiration dates for individual store entries if required:') || 'Differentiate expiration dates for individual store entries if required:'}
+                  </p>
+                  <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1 scrollbar-thin divide-y divide-gray-100">
+                    {visibleStores.map(s => (
+                      <div key={s.id} className="flex items-center justify-between gap-3 text-xs pt-2 first:pt-0">
+                        <span className="font-bold text-gray-700 truncate max-w-[160px]">{s.name}</span>
+                        <input
+                          type="date"
+                          name={`expiryDate_store_${s.id}`}
+                          defaultValue={editingStockItem?.expiryDates?.[s.id] || ''}
+                          className="px-2 py-1 border rounded-lg text-xs bg-white outline-none font-sans"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <button
                   type="button"

@@ -78,6 +78,7 @@ export default function Receipts({
   const [companyBranch, setCompanyBranch] = useState(() => localStorage.getItem('tradecore_receipt_company_branch') || 'Central Depot, Singida-Dodoma Rd');
   const [companyPhone, setCompanyPhone] = useState(() => localStorage.getItem('tradecore_receipt_company_phone') || '+255 26 250 1234');
   const [companyEmail, setCompanyEmail] = useState(() => localStorage.getItem('tradecore_receipt_company_email') || 'logistics@singidagrain.co.tz');
+  const [showBrandingConfig, setShowBrandingConfig] = useState(false);
 
   // Load custom logo and reprint counts from localStorage on mount
   useEffect(() => {
@@ -588,58 +589,59 @@ export default function Receipts({
 
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-8 overflow-hidden flex flex-col print-card">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-4 sm:my-8 overflow-hidden flex flex-col print-card max-h-[95vh] sm:max-h-[90vh]">
               
               {/* Modal Controls - Hidden during Printing */}
-              <div className="px-6 py-4 border-b bg-gray-50 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between no-print">
+              <div className="px-4 py-3 sm:px-6 sm:py-4 border-b bg-gray-50 flex flex-col md:flex-row gap-3 sm:gap-4 md:items-center md:justify-between no-print shrink-0">
                 <div className="flex flex-col gap-1">
-                  <span className="font-bold text-gray-900 flex items-center gap-1.5 text-sm">
+                  <span className="font-bold text-gray-900 flex items-center gap-1.5 text-xs sm:text-sm">
                     <FileText className="w-4 h-4 text-brand" />
                     {translate('Document Type')}: <span className="font-mono text-brand ml-1">{docId}</span>
                   </span>
                   
                   {/* Fraud Audit Reprint Status badge */}
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-0.5">
                     {printCount > 1 ? (
-                      <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-black flex items-center gap-1">
-                        <ShieldAlert className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                      <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-black flex items-center gap-1">
+                        <ShieldAlert className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-600 animate-pulse" />
                         {translate('Reprint Audit Secure')} (COPY #{printCount - 1})
                       </span>
                     ) : (
-                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-bold flex items-center gap-1">
+                        <ShieldCheck className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-600" />
                         {translate('Original Receipt')}
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                {/* Horizontal-scrollable action buttons on mobile screens to prevent layout breaking or cut-offs */}
+                <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto whitespace-nowrap scrollbar-none pb-1 md:pb-0 md:flex-wrap md:overflow-visible">
                   <button
                     onClick={handleVerifySecStamp}
                     disabled={verificationAnimating}
-                    className={`border px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm ${
+                    className={`border px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm ${
                       showSecurityCheck 
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
                         : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-200'
                     }`}
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${verificationAnimating ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-500 ${verificationAnimating ? 'animate-spin' : ''}`} />
                     {verificationAnimating ? `${translate('Verify') || 'Verifying'}...` : `${translate('Verify') || 'Verify Sec'}`}
                   </button>
                   {/* Export excel */}
                   <button
                     onClick={() => handleExportExcel(selectedReceipt.type, selectedReceipt.order)}
-                    className="bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm"
                     title="Export directly to real Excel formatted file"
                   >
-                    <FileSpreadsheet className="w-4 h-4" /> Excel
+                    <FileSpreadsheet className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Excel
                   </button>
                   <button
                     onClick={triggerPDFPrint}
-                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm"
                   >
-                    <Printer className="w-4 h-4" /> {translate('Print') || 'Print'}
+                    <Printer className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> {translate('Print') || 'Print'}
                   </button>
                   {selectedReceipt.type === 'selling' && (
                     <button
@@ -665,96 +667,111 @@ export default function Receipts({
                           logAction('Generated PDF Invoice', `Downloaded PDF invoice for sales ledger ${selectedReceipt.order.soNumber}`);
                         }
                       }}
-                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm"
                       title={translate('Download professional PDF Invoice') || 'Download professional PDF Invoice'}
                     >
-                      <FileText className="w-4 h-4 text-red-600" /> PDF Invoice
+                      <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600" /> PDF Invoice
                     </button>
                   )}
+                  {/* Toggle receipt config settings */}
+                  <button
+                    onClick={() => setShowBrandingConfig(!showBrandingConfig)}
+                    className={`border px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm ${
+                      showBrandingConfig 
+                        ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                        : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
+                    }`}
+                    title={translate('Configure Custom Company Details') || 'Configure custom details'}
+                  >
+                    <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    {showBrandingConfig ? (translate('Hide Settings') || 'Hide Settings') : (translate('Receipt Setup') || 'Receipt Setup')}
+                  </button>
                   <button
                     onClick={() => { setSelectedReceipt(null); setShowSecurityCheck(false); }}
-                    className="p-1.5 hover:bg-gray-200 rounded text-gray-500 ml-1"
+                    className="p-1.5 hover:bg-gray-200 rounded text-gray-500 ml-1 shrink-0"
                   >
-                    <X className="w-5 h-5" />
+                    <X className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
                 </div>
               </div>
 
               {/* CUSTOM COMPANY BRANDING DETAILS & LOGO UPLOADER (No-Print) */}
-              <div className="p-4 bg-gray-50/50 border-b grid grid-cols-1 md:grid-cols-3 gap-4 no-print text-xs">
-                <div className="md:col-span-2 space-y-3">
-                  <span className="text-[10px] font-bold text-gray-500 block tracking-wider uppercase">Configure Custom Company Details</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400">Business / Company Name</label>
-                      <input 
-                        type="text" 
-                        value={companyName}
-                        onChange={(e) => handleUpdateCompanyDetail('name', e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
-                        placeholder="Singida Grain Millers Ltd"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400">Branch Location / Address</label>
-                      <input 
-                        type="text" 
-                        value={companyBranch}
-                        onChange={(e) => handleUpdateCompanyDetail('branch', e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
-                        placeholder="Central Depot, Singida-Dodoma Rd"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400">Contact Hotline / Phone</label>
-                      <input 
-                        type="text" 
-                        value={companyPhone}
-                        onChange={(e) => handleUpdateCompanyDetail('phone', e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
-                        placeholder="+255 26 250 1234"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400">Authorized Email Address</label>
-                      <input 
-                        type="text" 
-                        value={companyEmail}
-                        onChange={(e) => handleUpdateCompanyDetail('email', e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
-                        placeholder="logistics@singidagrain.co.tz"
-                      />
+              {showBrandingConfig && (
+                <div className="p-4 bg-gray-50/50 border-b grid grid-cols-1 md:grid-cols-3 gap-4 no-print text-xs animate-fade-in shrink-0 max-h-[35vh] overflow-y-auto">
+                  <div className="md:col-span-2 space-y-3">
+                    <span className="text-[10px] font-bold text-gray-500 block tracking-wider uppercase">Configure Custom Company Details</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400">Business / Company Name</label>
+                        <input 
+                          type="text" 
+                          value={companyName}
+                          onChange={(e) => handleUpdateCompanyDetail('name', e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
+                          placeholder="Singida Grain Millers Ltd"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400">Branch Location / Address</label>
+                        <input 
+                          type="text" 
+                          value={companyBranch}
+                          onChange={(e) => handleUpdateCompanyDetail('branch', e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
+                          placeholder="Central Depot, Singida-Dodoma Rd"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400">Contact Hotline / Phone</label>
+                        <input 
+                          type="text" 
+                          value={companyPhone}
+                          onChange={(e) => handleUpdateCompanyDetail('phone', e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
+                          placeholder="+255 26 250 1234"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400">Authorized Email Address</label>
+                        <input 
+                          type="text" 
+                          value={companyEmail}
+                          onChange={(e) => handleUpdateCompanyDetail('email', e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-brand"
+                          placeholder="logistics@singidagrain.co.tz"
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex flex-col justify-between space-y-2.5 border-t md:border-t-0 md:border-l border-gray-200 md:pl-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 block tracking-wider uppercase mb-1.5">Company Logo</label>
-                    <div className="flex items-center gap-2">
-                      <label className="cursor-pointer bg-white border border-dashed border-gray-300 hover:border-brand/40 hover:bg-gray-50 rounded-lg px-3 py-2 flex items-center gap-2 text-xs font-semibold text-gray-600 shadow-sm flex-1 justify-center transition">
-                        <Upload className="w-4 h-4 text-brand" />
-                        Upload Logo PNG/JPG
-                        <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-                      </label>
-                      {customLogo && (
-                        <button
-                          onClick={handleRemoveCustomLogo}
-                          className="px-2.5 py-2 text-xs text-red-600 hover:bg-red-50 border border-red-100 rounded-lg font-bold"
-                        >
-                          Remove
-                        </button>
-                      )}
+                  <div className="flex flex-col justify-between space-y-2.5 border-t md:border-t-0 md:border-l border-gray-200 md:pl-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 block tracking-wider uppercase mb-1.5">Company Logo</label>
+                      <div className="flex items-center gap-2">
+                        <label className="cursor-pointer bg-white border border-dashed border-gray-300 hover:border-brand/40 hover:bg-gray-50 rounded-lg px-3 py-2 flex items-center gap-2 text-xs font-semibold text-gray-600 shadow-sm flex-1 justify-center transition">
+                          <Upload className="w-4 h-4 text-brand" />
+                          Upload Logo PNG/JPG
+                          <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                        </label>
+                        {customLogo && (
+                          <button
+                            onClick={handleRemoveCustomLogo}
+                            className="px-2.5 py-2 text-xs text-red-600 hover:bg-red-50 border border-red-100 rounded-lg font-bold"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {customLogo && (
+                      <div className="flex items-center gap-2 bg-white/50 p-1.5 rounded-lg border border-gray-100">
+                        <img src={customLogo} className="w-9 h-9 object-contain rounded border bg-white" alt="Custom Logo Thumbnail" />
+                        <div className="text-[10px] text-gray-500 font-medium truncate">Custom logo loaded & saved</div>
+                      </div>
+                    )}
                   </div>
-                  {customLogo && (
-                    <div className="flex items-center gap-2 bg-white/50 p-1.5 rounded-lg border border-gray-100">
-                      <img src={customLogo} className="w-9 h-9 object-contain rounded border bg-white" alt="Custom Logo Thumbnail" />
-                      <div className="text-[10px] text-gray-500 font-medium truncate">Custom logo loaded & saved</div>
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
 
               {/* Dynamic Digital Verification Report */}
               {showSecurityCheck && (
@@ -870,8 +887,8 @@ export default function Receipts({
                     </div>
 
                     {/* Products Table */}
-                    <div className="border border-gray-200 rounded-lg overflow-hidden mb-6">
-                      <table className="w-full text-xs text-left border-collapse">
+                    <div className="border border-gray-200 rounded-lg overflow-x-auto mb-6 scrollbar-thin">
+                      <table className="w-full text-xs text-left border-collapse min-w-[580px] sm:min-w-0">
                         <thead>
                           <tr className="bg-slate-100 font-bold text-gray-700 border-b">
                             <th className="px-4 py-3">{translate('Item Description')}</th>

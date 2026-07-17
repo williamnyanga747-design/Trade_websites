@@ -27,6 +27,15 @@ export const swahiliDict: Record<string, string> = {
   'User Access': 'Ufikiaji Watumiaji',
   'My Profile': 'Wasifu Wangu',
   'Logout': 'Toka',
+  'Companies': 'Kampuni',
+  'Branches': 'Matawi',
+  'Super Admin': 'Msimamizi Mkuu',
+  'Admin': 'Msimamizi',
+  'Retailer': 'Muuzaji wa Rejareja',
+  'Wholesaler': 'Muuzaji wa Jumla',
+  'Operator': 'Mhudumu / Opereta',
+  'POS Shift & Drawer Ledger': 'Shift ya POS na Droo ya Fedha',
+  'Data Recovery': 'Urejeshaji wa Data',
   'Total Value': 'Thamani Jumla',
   'Store': 'Duka',
   'Category': 'Kategoria',
@@ -105,14 +114,65 @@ export const swahiliDict: Record<string, string> = {
   'All Categories': 'Makundi Yote',
   'Registered Products List': 'Orodha ya Bidhaa Zilizosajiliwa',
   'Total Filtered Stock Summary:': 'Jumla ya Muhtasari wa Akiba:',
-  'Export Stock': 'Pakua Orodha ya Bidhaa'
+  'Export Stock': 'Pakua Orodha ya Bidhaa',
+  'Collapse Sidebar': 'Kunja Upau wa Kando',
+  'Expand Sidebar': 'Panua Upau wa Kando',
+  'Sign Out / Switch Account': 'Toka / Badilisha Akaunti',
+  'Sign Out': 'Toka',
+  'TOTAL INVENTORY VALUE': 'THAMANI YA JUMLA YA AKIBA',
+  'Active store level valuation': 'Thamani ya akiba katika duka linalohusika',
+  'LOW STOCK CRITICALS': 'BIDHAA ZILIZOPUNGUA SANA',
+  'Requires immediate purchase': 'Inahitaji manunuzi ya haraka',
+  "TODAY'S TURNOVER": 'MAUZO YA LEO',
+  'Completed checkout registers': 'Miamala ya mauzo iliyokamilika leo',
+  "TODAY'S PURCHASES": 'MANUNUZI YA LEO',
+  'Received PO invoices': 'Oda za manunuzi zilizopokelewa leo',
+  'TOTAL RECEIVABLES': 'JUMLA YA INAYODAIWA (WATEJA)',
+  'Customer outstanding ledger balances': 'Salio la madeni ya wateja ghalani',
+  'TOTAL PAYABLES': 'JUMLA YA INAYODAIWA (WAUZAJI)',
+  'Unresolved supplier invoices': 'Oda za wauzaji ambazo hazijalipwa bado'
+};
+
+export const pageTitleMap: Record<string, string> = {
+  'dashboard': 'Dashboard',
+  'stock-items': 'Stock Items',
+  'purchase-order': 'Purchase Order',
+  'sales-order': 'Sales Order',
+  'expenses': 'Expenses',
+  'receipts': 'Receipts',
+  'companies': 'Companies',
+  'branches': 'Branches',
+  'stores': 'Store Management',
+  'customers': 'Customers',
+  'suppliers': 'Suppliers',
+  'categories': 'Stock Categories',
+  'taxes': 'Manage Taxes',
+  'data-recovery': 'Data Recovery',
+  'import-stock': 'Import Stock Items',
+  'import-customers': 'Import Customers',
+  'import-suppliers': 'Import Suppliers',
+  'report-transaction': 'Transaction Report',
+  'report-financial': 'Financial Report',
+  'report-daily': 'Daily Activity Report',
+  'report-monthly': 'Monthly Report',
+  'report-sales': 'Sales Report',
+  'report-purchase': 'Purchase Report',
+  'report-sales-outstanding': 'Sales Outstanding',
+  'report-purchase-outstanding': 'Purchase Outstanding',
+  'report-lowstock': 'Low Stock Items Report',
+  'report-po-details': 'Purchase Order Details',
+  'report-shifts': 'POS Shift & Drawer Ledger',
+  'user-info': 'User Info',
+  'user-access': 'User Access',
+  'profile': 'My Profile'
 };
 
 export function translate(text: string, language: 'en' | 'sw'): string {
-  if (language === 'sw' && swahiliDict[text]) {
-    return swahiliDict[text];
+  const englishText = pageTitleMap[text] || text;
+  if (language === 'sw') {
+    return swahiliDict[text] || swahiliDict[englishText] || englishText;
   }
-  return text;
+  return englishText;
 }
 
 export function formatMoney(amount: number, currency: 'USD' | 'TZS', exchangeRate: number): string {

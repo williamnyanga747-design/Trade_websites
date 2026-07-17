@@ -51,6 +51,8 @@ export interface StockItem {
   lowStockQty: number;
   unit?: 'Kg' | 'Litres' | 'Package';
   imageUrl?: string;
+  expiryDate?: string; // Optional Expiry Date field (YYYY-MM-DD)
+  expiryDates?: { [storeId: number]: string }; // Store-specific expiry dates (storeId -> YYYY-MM-DD)
 }
 
 export interface POItem {
@@ -142,3 +144,20 @@ export interface Settings {
   currency: 'USD' | 'TZS';
   exchangeRate: number;
 }
+
+export interface PosShift {
+  id: number;
+  userId: number;
+  username: string;
+  storeId: number;
+  openTime: string;
+  closeTime?: string;
+  openingFloat: number;
+  closingCashActual?: number;
+  expectedCashSales?: number;
+  salesOrderIds: number[];
+  status: 'Open' | 'Closed';
+  variance?: number;
+  notes?: string;
+}
+

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expense } from '../types';
+import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expense, PosShift } from '../types';
 import { formatMoney } from '../utils/format';
 import {
-  FileSpreadsheet, Printer
+  FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
@@ -20,6 +20,7 @@ interface ReportsProps {
   currency: 'USD' | 'TZS';
   exchangeRate: number;
   translate: (text: string) => string;
+  posShifts?: PosShift[];
 }
 
 export default function Reports({
@@ -34,7 +35,8 @@ export default function Reports({
   currentStoreId,
   currency,
   exchangeRate,
-  translate: t
+  translate: t,
+  posShifts = []
 }: ReportsProps) {
   const storeId = currentStoreId || 1;
 
@@ -49,6 +51,12 @@ export default function Reports({
 
   // Month state for Monthly report
   const [selectedMonth, setSelectedMonth] = useState(todayStr.substring(0, 7));
+
+  // Shift ledger states
+  const [selectedShiftStoreId, setSelectedShiftStoreId] = useState<string>('all');
+  const [selectedShiftUserId, setSelectedShiftUserId] = useState<string>('all');
+  const [selectedShiftStatus, setSelectedShiftStatus] = useState<string>('all');
+  const [expandedShiftId, setExpandedShiftId] = useState<number | null>(null);
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -94,15 +102,17 @@ export default function Reports({
       csv.push(row.join(','));
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + csv.join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = '\ufeff' + csv.join('\n'); // Add UTF-8 BOM for Excel compatibility
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     const dateStr = new Date().toISOString().split('T')[0];
     link.setAttribute('download', `${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${dateStr}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handlePrint = () => {
@@ -683,6 +693,256 @@ export default function Reports({
     );
   }
 
+  const renderReportShifts = () => {
+    const filteredShifts = posShifts.filter(s => {
+      const storeMatch = selectedShiftStoreId === 'all' || s.storeId === Number(selectedShiftStoreId);
+      const userMatch = selectedShiftUserId === 'all' || s.userId === Number(selectedShiftUserId);
+      const statusMatch = selectedShiftStatus === 'all' || s.status === selectedShiftStatus;
+      return storeMatch && userMatch && statusMatch;
+    });
+
+    const totalSessions = filteredShifts.length;
+    const totalOpeningFloat = filteredShifts.reduce((sum, s) => sum + s.openingFloat, 0);
+    const totalExpectedSales = filteredShifts.reduce((sum, s) => sum + (s.expectedCashSales || 0), 0);
+    const totalActualCollected = filteredShifts.reduce((sum, s) => {
+      if (s.status === 'Closed') {
+        return sum + (s.closingCashActual || 0);
+      }
+      return sum + s.openingFloat + (s.expectedCashSales || 0); // theoretical for open
+    }, 0);
+    const totalVariance = filteredShifts.reduce((sum, s) => sum + (s.variance || 0), 0);
+
+    return (
+      <div className="space-y-6">
+        {/* Summary KPIs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 no-print">
+          <div className="bg-slate-50 border p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Total Shift Sessions</span>
+              <span className="text-xl font-black text-slate-800 mt-1 block">{totalSessions}</span>
+            </div>
+            <div className="bg-slate-200/50 text-slate-600 p-2.5 rounded-lg">
+              <Calendar className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 block">Expected Drawer Cash</span>
+              <span className="text-xl font-black text-emerald-800 mt-1 block">
+                {formatMoney(totalOpeningFloat + totalExpectedSales, currency, exchangeRate)}
+              </span>
+            </div>
+            <div className="bg-emerald-100/50 text-emerald-600 p-2.5 rounded-lg">
+              <Coins className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-indigo-50/50 border border-indigo-100 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 block">Actual Cash Counted</span>
+              <span className="text-xl font-black text-indigo-800 mt-1 block">
+                {formatMoney(totalActualCollected, currency, exchangeRate)}
+              </span>
+            </div>
+            <div className="bg-indigo-100/50 text-indigo-600 p-2.5 rounded-lg">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className={`border p-4 rounded-xl flex items-center justify-between ${
+            totalVariance < 0 ? 'bg-red-50/50 border-red-100' : totalVariance > 0 ? 'bg-amber-50/50 border-amber-100' : 'bg-green-50/50 border-green-100'
+          }`}>
+            <div>
+              <span className={`text-[10px] font-black uppercase tracking-wider block ${
+                totalVariance < 0 ? 'text-red-500' : totalVariance > 0 ? 'text-amber-600' : 'text-green-600'
+              }`}>Net Cash Variance</span>
+              <span className={`text-xl font-black mt-1 block ${
+                totalVariance < 0 ? 'text-red-700' : totalVariance > 0 ? 'text-amber-700' : 'text-green-700'
+              }`}>
+                {totalVariance > 0 ? '+' : ''}{formatMoney(totalVariance, currency, exchangeRate)}
+              </span>
+            </div>
+            <div className={`p-2.5 rounded-lg ${
+              totalVariance < 0 ? 'bg-red-100/50 text-red-600' : totalVariance > 0 ? 'bg-amber-100/50 text-amber-600' : 'bg-green-100/50 text-green-600'
+            }`}>
+              <AlertCircle className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* Filter Controls */}
+        <div className="flex flex-col sm:flex-row items-center gap-3 bg-gray-50 p-4 rounded-xl border no-print">
+          <div className="w-full sm:w-1/3 space-y-1">
+            <label className="text-[9px] font-black uppercase tracking-wider text-gray-400 block">Filter Store</label>
+            <select
+              value={selectedShiftStoreId}
+              onChange={(e) => setSelectedShiftStoreId(e.target.value)}
+              className="w-full px-2.5 py-1.5 bg-white border rounded-lg text-xs font-semibold outline-none text-gray-800"
+            >
+              <option value="all">All Stores / Depots</option>
+              {stores.map(st => (
+                <option key={st.id} value={st.id}>{st.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="w-full sm:w-1/3 space-y-1">
+            <label className="text-[9px] font-black uppercase tracking-wider text-gray-400 block">Filter Status</label>
+            <select
+              value={selectedShiftStatus}
+              onChange={(e) => setSelectedShiftStatus(e.target.value)}
+              className="w-full px-2.5 py-1.5 bg-white border rounded-lg text-xs font-semibold outline-none text-gray-800"
+            >
+              <option value="all">All Sessions</option>
+              <option value="Open">Active (Open)</option>
+              <option value="Closed">Reconciled (Closed)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Table View */}
+        <div className="overflow-x-auto border border-gray-100 rounded-xl bg-white shadow-xs">
+          <table className="w-full text-left border-collapse" id="report-shifts-table">
+            <thead>
+              <tr className="bg-gray-900 text-white text-[10px] font-black uppercase tracking-wider">
+                <th className="py-3 px-4">Session Ref</th>
+                <th className="py-3 px-4">Store / Depot</th>
+                <th className="py-3 px-4">Cashier / User</th>
+                <th className="py-3 px-4">Opened / Closed</th>
+                <th className="py-3 px-4 text-right">Float</th>
+                <th className="py-3 px-4 text-right">Sales</th>
+                <th className="py-3 px-4 text-right">Actual Count</th>
+                <th className="py-3 px-4 text-right">Variance</th>
+                <th className="py-3 px-4 text-center">Status</th>
+                <th className="py-3 px-4 text-center no-print">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y text-xs font-semibold text-gray-700 font-sans">
+              {filteredShifts.map((s) => {
+                const storeObj = stores.find(st => st.id === s.storeId);
+                const theoreticalTotal = s.openingFloat + (s.expectedCashSales || 0);
+                const isExpanded = expandedShiftId === s.id;
+
+                return (
+                  <React.Fragment key={s.id}>
+                    <tr className="hover:bg-slate-50/50 transition duration-150">
+                      <td className="py-3.5 px-4 font-mono font-bold text-gray-900">#SH-{String(s.id).padStart(4, '0')}</td>
+                      <td className="py-3.5 px-4">{storeObj?.name || `Store #${s.storeId}`}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="flex items-center gap-1.5 mt-0.5">
+                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span>{s.username}</span>
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-[10px] text-gray-500">
+                        <div className="flex flex-col">
+                          <span>O: {new Date(s.openTime).toLocaleDateString()} {new Date(s.openTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {s.closeTime && (
+                            <span>C: {new Date(s.closeTime).toLocaleDateString()} {new Date(s.closeTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 text-right font-mono text-gray-900">{formatMoney(s.openingFloat, currency, exchangeRate)}</td>
+                      <td className="py-3.5 px-4 text-right font-mono text-emerald-600 font-bold">+{formatMoney(s.expectedCashSales || 0, currency, exchangeRate)}</td>
+                      <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-800">
+                        {s.status === 'Closed' ? formatMoney(s.closingCashActual || 0, currency, exchangeRate) : formatMoney(theoreticalTotal, currency, exchangeRate)}
+                      </td>
+                      <td className={`py-3.5 px-4 text-right font-mono font-black ${
+                        s.status === 'Open' ? 'text-gray-400' : (s.variance || 0) < 0 ? 'text-red-600 bg-red-50/30' : (s.variance || 0) > 0 ? 'text-amber-600 bg-amber-50/30' : 'text-green-600 bg-green-50/30'
+                      }`}>
+                        {s.status === 'Open' ? '-' : `${(s.variance || 0) > 0 ? '+' : ''}${formatMoney(s.variance || 0, currency, exchangeRate)}`}
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border ${
+                          s.status === 'Open' 
+                            ? 'bg-amber-50 text-amber-700 border-amber-200' 
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
+                          {s.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center no-print">
+                        <button
+                          onClick={() => setExpandedShiftId(isExpanded ? null : s.id)}
+                          className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-2.5 py-1 rounded transition"
+                        >
+                          {isExpanded ? 'Hide Details' : 'View Ledger'}
+                        </button>
+                      </td>
+                    </tr>
+
+                    {/* Expanded Drawer row */}
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={10} className="bg-slate-50/60 p-5 border-t border-b border-slate-200/80">
+                          <div className="space-y-4 max-w-4xl">
+                            <h5 className="font-black text-gray-900 text-xs uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
+                              <FileText className="w-4 h-4 text-indigo-600" /> Compiled Shift Invoice Log
+                            </h5>
+                            
+                            {s.notes && (
+                              <div className="bg-white p-3 rounded-xl border text-[11px] text-gray-600 italic">
+                                <strong className="font-bold uppercase tracking-wider block text-[9px] text-gray-400 mb-1">Session Closure Notes:</strong>
+                                "{s.notes}"
+                              </div>
+                            )}
+
+                            <div className="bg-white rounded-xl border overflow-hidden">
+                              <table className="w-full text-left">
+                                <thead className="bg-slate-100/80 text-[10px] font-black text-slate-600 uppercase tracking-wider border-b">
+                                  <tr>
+                                    <th className="py-2.5 px-3">Order Ref</th>
+                                    <th className="py-2.5 px-3">Date</th>
+                                    <th className="py-2.5 px-3">Billing Mode</th>
+                                    <th className="py-2.5 px-3 text-right">Total Invoice</th>
+                                    <th className="py-2.5 px-3 text-right text-green-700">Estimated Profit</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="text-xs font-semibold text-gray-700 divide-y">
+                                  {salesOrders.filter(so => s.salesOrderIds?.includes(so.id)).map((so) => (
+                                    <tr key={so.id} className="hover:bg-slate-50">
+                                      <td className="py-2 px-3 font-mono font-bold text-gray-900">{so.soNumber}</td>
+                                      <td className="py-2 px-3">{so.date}</td>
+                                      <td className="py-2 px-3">
+                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border uppercase ${
+                                          so.priceType === 'Wholesale' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-blue-50 text-blue-700 border-blue-200'
+                                        }`}>
+                                          {so.priceType}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 px-3 text-right font-mono font-bold">{formatMoney(so.total, currency, exchangeRate)}</td>
+                                      <td className="py-2 px-3 text-right font-mono text-green-600 font-bold">+{formatMoney(so.profit, currency, exchangeRate)}</td>
+                                    </tr>
+                                  ))}
+                                  {(!s.salesOrderIds || s.salesOrderIds.length === 0) && (
+                                    <tr>
+                                      <td colSpan={5} className="py-4 text-center text-gray-400 font-bold text-xs">{t('No transaction was registered in this shift.')}</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+
+              {filteredShifts.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="text-center py-10 text-gray-400 font-black text-xs">{t('No drawer shift sessions match your query.')}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   // Determine active table ID for CSV export
   let currentTableId = 'report-tx-table';
   let reportTitle = '';
@@ -714,6 +974,9 @@ export default function Reports({
   } else if (currentPage === 'report-po-details') {
     currentTableId = 'po-details-table';
     reportTitle = t('Purchase Order Details');
+  } else if (currentPage === 'report-shifts') {
+    currentTableId = 'report-shifts-table';
+    reportTitle = t('POS Shift & Drawer Ledger');
   }
 
   const renderContent = () => {
@@ -727,6 +990,7 @@ export default function Reports({
       case 'report-purchase-outstanding': return renderReportPurchaseOutstanding();
       case 'report-lowstock': return renderReportLowStock();
       case 'report-po-details': return renderReportPODetails();
+      case 'report-shifts': return renderReportShifts();
       default: return null;
     }
   };

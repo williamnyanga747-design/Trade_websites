@@ -5,36 +5,48 @@ import {
   persistentMultipleTabManager,
   doc, 
   setDoc, 
-  getDoc, 
   getDocFromServer,
   getDocFromCache,
   onSnapshot 
 } from 'firebase/firestore';
 import config from '../../firebase-applet-config.json';
 
-// Initialize Firebase App
-const firebaseConfig = {
-  apiKey: config.apiKey,
-  authDomain: config.authDomain,
-  projectId: config.projectId,
-  storageBucket: config.storageBucket,
-  messagingSenderId: config.messagingSenderId,
-  appId: config.appId
-};
+let app: any = null;
+let db: any = null;
+let isFirebaseAvailable = false;
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+try {
+  if (config && config.apiKey && config.projectId) {
+    const firebaseConfig = {
+      apiKey: config.apiKey,
+      authDomain: config.authDomain,
+      projectId: config.projectId,
+      storageBucket: config.storageBucket,
+      messagingSenderId: config.messagingSenderId,
+      appId: config.appId
+    };
 
-// Configure Firestore with long polling and persistent offline local cache to handle connectivity drops or iframe constraints
-const dbSettings = {
-  experimentalForceLongPolling: true,
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-};
+    app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-const db = config.firestoreDatabaseId 
-  ? initializeFirestore(app, dbSettings, config.firestoreDatabaseId)
-  : initializeFirestore(app, dbSettings);
+    const dbSettings = {
+      experimentalForceLongPolling: true,
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+      })
+    };
+
+    db = config.firestoreDatabaseId 
+      ? initializeFirestore(app, dbSettings, config.firestoreDatabaseId)
+      : initializeFirestore(app, dbSettings);
+
+    isFirebaseAvailable = true;
+    console.log('[Firebase] Successfully initialized self-reliant sync database.');
+  } else {
+    console.warn('[Firebase] No valid API configuration keys found. Operating in pure offline local storage mode.');
+  }
+} catch (e) {
+  console.warn('[Firebase] Initialization skipped (Pure offline local storage mode active). Details:', e);
+}
 
 const SYSTEM_COLLECTION = 'system';
 const DATA_DOC_ID = 'tradecore_data';
@@ -43,6 +55,9 @@ const DATA_DOC_ID = 'tradecore_data';
  * Saves the unified system state to Firestore
  */
 export async function saveSystemDataToCloud(data: any): Promise<void> {
+  if (!isFirebaseAvailable || !db) {
+    return;
+  }
   try {
     const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
     // Sanitize any undefined properties recursively to prevent Firestore errors
@@ -62,6 +77,9 @@ export async function saveSystemDataToCloud(data: any): Promise<void> {
  * but falls back to the local cache if offline or on connection failure.
  */
 export async function fetchSystemDataFromCloud(): Promise<any | null> {
+  if (!isFirebaseAvailable || !db) {
+    return null;
+  }
   const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
   try {
     const docSnap = await getDocFromServer(docRef);
@@ -87,6 +105,9 @@ export async function fetchSystemDataFromCloud(): Promise<any | null> {
  * Subscribes to real-time changes of the unified system state in Firestore
  */
 export function subscribeToSystemDataCloud(callback: (data: any) => void): () => void {
+  if (!isFirebaseAvailable || !db) {
+    return () => {};
+  }
   const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
   return onSnapshot(docRef, (docSnap) => {
     if (docSnap.exists()) {
@@ -98,3 +119,4 @@ export function subscribeToSystemDataCloud(callback: (data: any) => void): () =>
     console.error('Error in real-time cloud data subscription:', error);
   });
 }
+
