@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { StockItem, Customer, Supplier, Store } from '../types';
 import { FileUp, HelpCircle, CheckCircle } from 'lucide-react';
+import { toast } from '../utils/toast';
 
 interface ImportDataProps {
   currentPage: string;
@@ -29,7 +30,7 @@ export default function ImportData({
 
   const handleImport = () => {
     if (!pasteAreaValue.trim()) {
-      alert(t('Paste CSV or CSV data before submitting'));
+      toast.warning(t('Paste CSV or CSV data before submitting'));
       return;
     }
 
@@ -79,7 +80,7 @@ export default function ImportData({
 
       saveAllData({ stockItems: updatedStockItems });
       logAction('Bulk Import Stock Items', `Imported ${parsedCount} items successfully. Found ${duplicateCount} duplicates.`);
-      alert(`${t('Import completed')}: ${parsedCount} ${t('added')}. ${duplicateCount} ${t('skipped')}.`);
+      toast.success(`${t('Import completed')}: ${parsedCount} ${t('added')}. ${duplicateCount} ${t('skipped')}.`);
       onNavigate('stock-items');
 
     } else if (currentPage === 'import-customers') {
@@ -111,7 +112,7 @@ export default function ImportData({
 
       saveAllData({ customers: updatedCustomers });
       logAction('Bulk Import Customers', `Imported ${parsedCount} customers successfully.`);
-      alert(`${t('Import completed')}: ${parsedCount} ${t('added')}.`);
+      toast.success(`${t('Import completed')}: ${parsedCount} ${t('added')}.`);
       onNavigate('customers');
 
     } else if (currentPage === 'import-suppliers') {
@@ -138,7 +139,7 @@ export default function ImportData({
 
       saveAllData({ suppliers: updatedSuppliers });
       logAction('Bulk Import Suppliers', `Imported ${parsedCount} suppliers successfully.`);
-      alert(`${t('Import completed')}: ${parsedCount} ${t('added')}.`);
+      toast.success(`${t('Import completed')}: ${parsedCount} ${t('added')}.`);
       onNavigate('suppliers');
     }
   };

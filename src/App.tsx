@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings, PosShift
+  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings, PosShift, StockTransfer
 } from './types';
 import {
   defaultSettings, defaultRolePermissions, defaultCompanies, defaultBranches, defaultStores, defaultUsers,
@@ -29,6 +29,7 @@ import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
 import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
+import { toast, Toast } from './utils/toast';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Cell, PieChart, Pie
 } from 'recharts';
@@ -37,9 +38,9 @@ import {
 import {
   LayoutDashboard, Package, ShoppingCart, Receipt, DollarSign, FileText, Database, FileUp,
   BarChart3, Users, UserCircle, LogOut, Settings as SettingsIcon, Search, Plus, ArrowLeftRight,
-  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X,
+  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X, XCircle,
   ShieldAlert, DollarSign as DollarIcon, CreditCard, Monitor, Barcode, Store as StoreIcon,
-  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe
+  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck
 } from 'lucide-react';
 
 // Helper function to darken/lighten hex colors dynamically
@@ -75,6 +76,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>(defaultRolePermissions);
   const [posShifts, setPosShifts] = useState<PosShift[]>([]);
+  const [stockTransfers, setStockTransfers] = useState<StockTransfer[]>([]);
 
   // --- OPERATIONAL STATES ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -82,6 +84,33 @@ export default function App() {
   const [currentCompanyId, setCurrentCompanyId] = useState<number | null>(null);
   const [currentBranchId, setCurrentBranchId] = useState<number | null>(null);
   const [currentStoreId, setCurrentStoreId] = useState<number | null>(null);
+
+  const getActiveCurrency = (): string => {
+    if (currentUser) {
+      if (settings.userCurrencies && settings.userCurrencies[currentUser.username]) {
+        return settings.userCurrencies[currentUser.username];
+      }
+      if (currentUser.companyId && settings.companyCurrencies && settings.companyCurrencies[currentUser.companyId]) {
+        return settings.companyCurrencies[currentUser.companyId];
+      }
+    }
+    return settings.currency;
+  };
+
+  const getActiveExchangeRate = (): number => {
+    if (currentUser) {
+      if (settings.userExchangeRates && settings.userExchangeRates[currentUser.username] !== undefined) {
+        return settings.userExchangeRates[currentUser.username];
+      }
+      if (currentUser.companyId && settings.companyExchangeRates && settings.companyExchangeRates[currentUser.companyId] !== undefined) {
+        return settings.companyExchangeRates[currentUser.companyId];
+      }
+    }
+    return settings.exchangeRate;
+  };
+
+  const activeCurrency = getActiveCurrency();
+  const activeExchangeRate = getActiveExchangeRate();
 
   // --- CASCADE DYNAMIC FILTERING ---
   const activeData = React.useMemo(() => filterActiveData({
@@ -122,6 +151,7 @@ export default function App() {
     settings: Settings;
     rolePermissions: Record<string, string[]>;
     posShifts: PosShift[];
+    stockTransfers: StockTransfer[];
   }>({
     companies: [],
     branches: [],
@@ -139,6 +169,7 @@ export default function App() {
     settings: defaultSettings,
     rolePermissions: defaultRolePermissions,
     posShifts: [],
+    stockTransfers: [],
   });
 
   // --- AUTH / SECURITY STATES ---
@@ -149,6 +180,20 @@ export default function App() {
   const [forceConfirmPass, setForceConfirmPass] = useState('');
 
   // --- INTERACTIVE UI MODALS STATES ---
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  useEffect(() => {
+    const unsubscribe = toast.subscribe((newToast) => {
+      setToasts(prev => [...prev, newToast]);
+      if (newToast.duration !== 0) {
+        setTimeout(() => {
+          setToasts(prev => prev.filter(t => t.id !== newToast.id));
+        }, newToast.duration || 4000);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -179,6 +224,9 @@ export default function App() {
   // Stock list filters
   const [stockSearchQuery, setStockSearchQuery] = useState('');
   const [stockFilterCategory, setStockFilterCategory] = useState('');
+  const [transferFilter, setTransferFilter] = useState<'All' | 'Pending' | 'In-Transit' | 'Completed' | 'Rejected'>('All');
+  const [currencySandboxAmount, setCurrencySandboxAmount] = useState<string>('1');
+  const [localExchangeRateStr, setLocalExchangeRateStr] = useState<string>('');
   
   // Modals for PO/SO
   const [showPOModal, setShowPOModal] = useState(false);
@@ -230,6 +278,7 @@ export default function App() {
       settings: parsed.settings || defaultSettings,
       rolePermissions: parsed.rolePermissions || defaultRolePermissions,
       posShifts: parsed.posShifts || [],
+      stockTransfers: parsed.stockTransfers || [],
     };
 
     dbStateRef.current = updatedState;
@@ -250,6 +299,7 @@ export default function App() {
     setSettings(updatedState.settings);
     setRolePermissions(updatedState.rolePermissions);
     setPosShifts(updatedState.posShifts);
+    setStockTransfers(updatedState.stockTransfers);
   };
 
   // --- LOAD INITIAL DATA AND REAL-TIME SYNC FROM CLOUD ---
@@ -410,6 +460,7 @@ export default function App() {
     expenses: Expense[]; auditTrails: AuditTrail[]; settings: Settings;
     rolePermissions: Record<string, string[]>;
     posShifts: PosShift[];
+    stockTransfers: StockTransfer[];
   }>) => {
     // Record cooldown timestamp to pause background synchronization polling
     lastLocalWriteTimeRef.current = Date.now();
@@ -447,6 +498,7 @@ export default function App() {
       settings: updatedFields.settings !== undefined ? updatedFields.settings : current.settings,
       rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : current.rolePermissions,
       posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : current.posShifts,
+      stockTransfers: updatedFields.stockTransfers !== undefined ? updatedFields.stockTransfers : current.stockTransfers,
     };
     dbStateRef.current = nextState;
 
@@ -467,6 +519,7 @@ export default function App() {
     if (updatedFields.settings !== undefined) setSettings(updatedFields.settings);
     if (updatedFields.rolePermissions !== undefined) setRolePermissions(updatedFields.rolePermissions);
     if (updatedFields.posShifts !== undefined) setPosShifts(updatedFields.posShifts);
+    if (updatedFields.stockTransfers !== undefined) setStockTransfers(updatedFields.stockTransfers);
 
     // 2. Compute local state with optimistic changes
     const freshDataLocal = {
@@ -507,6 +560,7 @@ export default function App() {
           settings: updatedFields.settings !== undefined ? updatedFields.settings : (isCloudNewer ? (cloudData.settings || latestDb.settings) : latestDb.settings),
           rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : (isCloudNewer ? (cloudData.rolePermissions || latestDb.rolePermissions) : latestDb.rolePermissions),
           posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : (isCloudNewer ? (cloudData.posShifts || latestDb.posShifts) : latestDb.posShifts),
+          stockTransfers: updatedFields.stockTransfers !== undefined ? updatedFields.stockTransfers : (isCloudNewer ? (cloudData.stockTransfers || latestDb.stockTransfers) : latestDb.stockTransfers),
           lastUpdated: new Date().toISOString()
         };
 
@@ -529,6 +583,7 @@ export default function App() {
             settings: mergedData.settings,
             rolePermissions: mergedData.rolePermissions,
             posShifts: mergedData.posShifts,
+            stockTransfers: mergedData.stockTransfers,
           };
 
           if (updatedFields.companies === undefined && cloudData.companies) setCompanies(cloudData.companies);
@@ -547,6 +602,7 @@ export default function App() {
           if (updatedFields.settings === undefined && cloudData.settings) setSettings(cloudData.settings);
           if (updatedFields.rolePermissions === undefined && cloudData.rolePermissions) setRolePermissions(cloudData.rolePermissions);
           if (updatedFields.posShifts === undefined && cloudData.posShifts) setPosShifts(cloudData.posShifts);
+          if (updatedFields.stockTransfers === undefined && cloudData.stockTransfers) setStockTransfers(cloudData.stockTransfers);
         }
       }
 
@@ -633,9 +689,9 @@ export default function App() {
       URL.revokeObjectURL(url);
       
       logAction('Database Backup', 'Exported complete database JSON file.');
-      alert('Database Backup Downloaded Successfully! You can find it in your downloads folder.');
+      toast.success(t('Database Backup Downloaded Successfully! You can find it in your downloads folder.'));
     } catch (err) {
-      alert('Failed to export database: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(t('Failed to export database: ') + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -1616,9 +1672,9 @@ export default function App() {
       URL.revokeObjectURL(url);
 
       logAction('Export Offline HTML', 'Downloaded self-contained, interactive HTML web app client.');
-      alert('Interactive HTML File Downloaded Successfully! You can open this file on any device offline to view your reports and logs.');
+      toast.success(t('Interactive HTML File Downloaded Successfully! You can open this file on any device offline to view your reports and logs.'));
     } catch (err) {
-      alert('Failed to generate HTML file: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error(t('Failed to generate HTML file: ') + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -1632,7 +1688,7 @@ export default function App() {
         const json = JSON.parse(e.target?.result as string);
         
         if (!json.stockItems || !json.salesOrders || !json.purchaseOrders || !json.users) {
-          alert('Invalid backup file structure. Please ensure you are uploading a valid TradeCore ERP database backup.');
+          toast.error(t('Invalid backup file structure. Please ensure you are uploading a valid TradeCore ERP database backup.'));
           return;
         }
 
@@ -1653,10 +1709,12 @@ export default function App() {
           rolePermissions: json.rolePermissions || rolePermissions
         });
 
-        alert('Database backup restored successfully! Reloading application states...');
-        window.location.reload();
+        toast.success(t('Database backup restored successfully! Reloading application states...'));
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
       } catch (err) {
-        alert('Failed to parse database file: ' + (err instanceof Error ? err.message : String(err)));
+        toast.error(t('Failed to parse database file: ') + (err instanceof Error ? err.message : String(err)));
       }
     };
     reader.readAsText(file);
@@ -1671,7 +1729,7 @@ export default function App() {
     if (liveUser) {
       if (liveUser.status === 'Blocked') {
         handleLogout();
-        alert('Your account access has been blocked by system administration.');
+        toast.error(t('Your account access has been blocked by system administration.'));
         return;
       }
       
@@ -1820,7 +1878,7 @@ export default function App() {
     );
     if (found) {
       if (found.status === 'Blocked') {
-        alert('Your access credentials have been blocked.');
+        toast.error(t('Your access credentials have been blocked.'));
         return;
       }
       
@@ -1834,7 +1892,7 @@ export default function App() {
         logAction('User Login', `Session opened successfully.`);
       }
     } else {
-      alert('Invalid login credentials provided.');
+      toast.error(t('Invalid login credentials provided.'));
     }
   };
 
@@ -1848,11 +1906,11 @@ export default function App() {
   const handleForcePasswordChange = (e: React.FormEvent) => {
     e.preventDefault();
     if (forceNewPass.length < 4) {
-      alert('Password must be at least 4 characters long.');
+      toast.error(t('Password must be at least 4 characters long.'));
       return;
     }
     if (forceNewPass !== forceConfirmPass) {
-      alert('New passwords do not match.');
+      toast.error(t('New passwords do not match.'));
       return;
     }
 
@@ -1871,7 +1929,7 @@ export default function App() {
     setShowForcePasswordModal(false);
     setCurrentPage('dashboard');
     logAction('Forced Password Change', 'Updated default password on first sign-in.');
-    alert('Security updated successfully! Welcome to TradeCore.');
+    toast.success(t('Security updated successfully! Welcome to TradeCore.'));
   };
 
   const handleContextChange = (level: 'company' | 'branch' | 'store', val: number) => {
@@ -2115,6 +2173,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-start">
@@ -2408,6 +2468,79 @@ export default function App() {
     );
   };
 
+  const handleApproveShip = (transfer: StockTransfer) => {
+    const item = stockItems.find(p => p.id === transfer.productId);
+    if (!item) return;
+    if ((item.stock?.[transfer.fromStoreId] || 0) < transfer.qty) {
+      toast.error(t('Insufficient stock weights in the source store.'));
+      return;
+    }
+    // Deduct from source store only!
+    const updatedStock = stockItems.map(p => {
+      if (p.id === transfer.productId) {
+        const nextStockObj = { ...p.stock };
+        nextStockObj[transfer.fromStoreId] = (nextStockObj[transfer.fromStoreId] || 0) - transfer.qty;
+        return { ...p, stock: nextStockObj };
+      }
+      return p;
+    });
+    // Set transfer status to In-Transit
+    const updatedTransfers = stockTransfers.map(t => {
+      if (t.id === transfer.id) {
+        return { ...t, status: 'In-Transit' as const, sentAt: new Date().toISOString().split('T')[0] };
+      }
+      return t;
+    });
+
+    saveAllData({ stockItems: updatedStock, stockTransfers: updatedTransfers });
+    logAction('Stock Transfer Dispatched', `Dispatched ${transfer.qty}x ${item.name} from ${stores.find(s => s.id === transfer.fromStoreId)?.name} (In Transit).`);
+    toast.success(t('Stock transfer has been dispatched and is now IN-TRANSIT.'));
+  };
+
+  const handleReceiveComplete = (transfer: StockTransfer) => {
+    const item = stockItems.find(p => p.id === transfer.productId);
+    if (!item) return;
+
+    // Add to receiving store!
+    const updatedStock = stockItems.map(p => {
+      if (p.id === transfer.productId) {
+        const nextStockObj = { ...p.stock };
+        nextStockObj[transfer.toStoreId] = (nextStockObj[transfer.toStoreId] || 0) + transfer.qty;
+        return { ...p, stock: nextStockObj };
+      }
+      return p;
+    });
+
+    // Set transfer status to Completed
+    const updatedTransfers = stockTransfers.map(t => {
+      if (t.id === transfer.id) {
+        return { ...t, status: 'Completed' as const, receivedAt: new Date().toISOString().split('T')[0] };
+      }
+      return t;
+    });
+
+    saveAllData({ stockItems: updatedStock, stockTransfers: updatedTransfers });
+    logAction('Stock Transfer Completed', `Received ${transfer.qty}x ${item.name} at ${stores.find(s => s.id === transfer.toStoreId)?.name}.`);
+    toast.success(t('Stock transfer completed successfully! Inventory updated.'));
+  };
+
+  const handleRejectTransfer = (transfer: StockTransfer) => {
+    const item = stockItems.find(p => p.id === transfer.productId);
+    if (!item) return;
+
+    // Just mark as Rejected (no stock was deducted when pending)
+    const updatedTransfers = stockTransfers.map(t => {
+      if (t.id === transfer.id) {
+        return { ...t, status: 'Rejected' as const };
+      }
+      return t;
+    });
+
+    saveAllData({ stockTransfers: updatedTransfers });
+    logAction('Stock Transfer Rejected', `Rejected transfer of ${transfer.qty}x ${item.name}.`);
+    toast.success(t('Stock transfer request rejected and cancelled.'));
+  };
+
   // 2. Stock items component controller
   const renderStockItems = () => {
     const isRetailer = currentUser?.role === 'Retailer';
@@ -2602,6 +2735,7 @@ export default function App() {
                   <th className="px-4 py-3 text-right">{t('Cost Price')}</th>
                   <th className="px-4 py-3 text-right">{t('Retail price')}</th>
                   <th className="px-4 py-3 text-right">{t('Wholesale price')}</th>
+                  <th className="px-4 py-3 text-right text-indigo-600">{t('Partner Price')}</th>
                   <th className="px-4 py-3 text-right text-indigo-700">{t('Total Value')}</th>
                   {!isRetailer && <th className="px-4 py-3 w-20"></th>}
                 </tr>
@@ -2695,6 +2829,7 @@ export default function App() {
                       <td className="px-4 py-3 text-right text-gray-500">{formatMoney(p.purchasePrice, settings.currency, settings.exchangeRate)}</td>
                       <td className="px-4 py-3 text-right text-blue-600">{formatMoney(p.retailPrice, settings.currency, settings.exchangeRate)}</td>
                       <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, settings.currency, settings.exchangeRate)}</td>
+                      <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, settings.currency, settings.exchangeRate)}</td>
                       <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50/20">
                         {formatMoney(globalStock * p.purchasePrice, settings.currency, settings.exchangeRate)}
                       </td>
@@ -2741,6 +2876,172 @@ export default function App() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* --- INTER-STORE TRANSFERS MANIFEST --- */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mt-6">
+          <div className="p-4 border-b flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gray-50/50">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-brand/10 text-brand rounded-lg">
+                <Truck className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="font-bold text-gray-900 text-sm block">{t('Inter-Store Transfers Manifest')}</span>
+                <span className="text-[10px] text-gray-500">{t('Track and reconcile physical stock movements between store locations')}</span>
+              </div>
+            </div>
+            {/* Filter tabs */}
+            <div className="flex items-center gap-1 overflow-x-auto bg-gray-100 p-1 rounded-lg shrink-0">
+              {(['All', 'Pending', 'In-Transit', 'Completed', 'Rejected'] as const).map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setTransferFilter(tab)}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold transition whitespace-nowrap ${
+                    transferFilter === tab
+                      ? 'bg-white text-gray-900 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-900'
+                  }`}
+                >
+                  {t(tab)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-gray-50 border-b text-gray-500 uppercase font-bold text-[10px]">
+                <tr>
+                  <th className="p-3">{t('Manifest No.')}</th>
+                  <th className="p-3">{t('Product')}</th>
+                  <th className="p-3">{t('From Location')}</th>
+                  <th className="p-3">{t('To Location')}</th>
+                  <th className="p-3 text-center">{t('Quantity')}</th>
+                  <th className="p-3">{t('Request Date')}</th>
+                  <th className="p-3">{t('Transit Timeline')}</th>
+                  <th className="p-3">{t('Status')}</th>
+                  <th className="p-3 text-right">{t('Reconciliation Actions')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-semibold text-gray-700">
+                {stockTransfers
+                  .filter(transfer => transferFilter === 'All' || transfer.status === transferFilter)
+                  .map(transfer => {
+                    const product = stockItems.find(p => p.id === transfer.productId);
+                    const sourceStore = stores.find(s => s.id === transfer.fromStoreId);
+                    const destStore = stores.find(s => s.id === transfer.toStoreId);
+
+                    return (
+                      <tr key={transfer.id} className="hover:bg-gray-50 transition">
+                        <td className="p-3 font-mono text-gray-900">{transfer.transferNumber}</td>
+                        <td className="p-3">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-gray-900">{product?.name || `Product #${transfer.productId}`}</span>
+                            <span className="text-[10px] text-gray-400 font-mono">SKU: {product?.code || '-'}</span>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <span className="px-2 py-0.5 bg-gray-100 border border-gray-200 text-gray-700 rounded text-[10px] font-bold">
+                            {sourceStore?.name || `Store #${transfer.fromStoreId}`}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <span className="px-2 py-0.5 bg-brand/5 border border-brand/10 text-brand rounded text-[10px] font-bold">
+                            {destStore?.name || `Store #${transfer.toStoreId}`}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center text-gray-900 font-bold">{transfer.qty}</td>
+                        <td className="p-3 text-gray-500 font-mono text-[10px]">{transfer.createdAt}</td>
+                        <td className="p-3">
+                          <div className="flex flex-col gap-0.5 text-[10px] text-gray-500 font-mono">
+                            {transfer.sentAt && (
+                              <span>🚢 {t('Shipped')}: {transfer.sentAt}</span>
+                            )}
+                            {transfer.receivedAt && (
+                              <span>📦 {t('Received')}: {transfer.receivedAt}</span>
+                            )}
+                            {!transfer.sentAt && !transfer.receivedAt && (
+                              <span className="text-gray-400 italic">{t('Not yet dispatched')}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          {transfer.status === 'Pending' && (
+                            <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1 w-max">
+                              <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping" />
+                              {t('Pending Dispatch')}
+                            </span>
+                          )}
+                          {transfer.status === 'In-Transit' && (
+                            <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1 w-max">
+                              <Truck className="w-3 h-3 text-blue-500 animate-bounce" />
+                              {t('In-Transit')}
+                            </span>
+                          )}
+                          {transfer.status === 'Completed' && (
+                            <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1 w-max">
+                              <CheckCircle className="w-3 h-3 text-emerald-500" />
+                              {t('Completed')}
+                            </span>
+                          )}
+                          {transfer.status === 'Rejected' && (
+                            <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-red-50 text-red-700 border border-red-200 flex items-center gap-1 w-max">
+                              <XCircle className="w-3 h-3 text-red-500" />
+                              {t('Rejected')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center gap-1.5 justify-end">
+                            {transfer.status === 'Pending' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveShip(transfer)}
+                                  className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold shadow-xs transition"
+                                >
+                                  {t('Dispatch')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectTransfer(transfer)}
+                                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded text-[10px] font-bold border border-red-200 transition"
+                                >
+                                  {t('Reject')}
+                                </button>
+                              </>
+                            )}
+                            {transfer.status === 'In-Transit' && (
+                              <button
+                                type="button"
+                                onClick={() => handleReceiveComplete(transfer)}
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold shadow-xs transition"
+                              >
+                                {t('Verify Receipt')}
+                              </button>
+                            )}
+                            {['Completed', 'Rejected'].includes(transfer.status) && (
+                              <span className="text-[10px] text-gray-400 italic font-medium">
+                                {t('Reconciled')}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {stockTransfers.filter(transfer => transferFilter === 'All' || transfer.status === transferFilter).length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="p-8 text-center text-gray-400 font-medium">
+                      <Truck className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                      {t('No stock transfers found matching the filter.')}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2983,8 +3284,8 @@ export default function App() {
             expenses={activeExpenses}
             stores={stores}
             currentStoreId={currentStoreId}
-            currency={settings.currency}
-            exchangeRate={settings.exchangeRate}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
             isAdmin={currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin'}
             logAction={logAction}
             onUpdateExpenses={(newExpenses) => saveAllData({ expenses: newExpenses })}
@@ -3001,8 +3302,8 @@ export default function App() {
             suppliers={suppliers}
             stockItems={activeStockItems}
             currentStoreId={currentStoreId}
-            currency={settings.currency}
-            exchangeRate={settings.exchangeRate}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
             translate={t}
             currentUser={currentUser}
             language={settings.language}
@@ -3020,8 +3321,8 @@ export default function App() {
             stockItems={activeStockItems}
             stores={stores}
             currentStoreId={currentStoreId}
-            currency={settings.currency}
-            exchangeRate={settings.exchangeRate}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
           />
         );
       case 'companies':
@@ -3032,6 +3333,7 @@ export default function App() {
       case 'categories':
       case 'taxes':
       case 'data-recovery':
+      case 'exchange-rate':
         return (
           <MasterData
             currentPage={currentPage}
@@ -3049,11 +3351,14 @@ export default function App() {
             currentStoreId={currentStoreId}
             isAdmin={currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin'}
             isSuperAdmin={currentUser?.role === 'Super Admin'}
-            currency={settings.currency}
-            exchangeRate={settings.exchangeRate}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
             translate={t}
             logAction={logAction}
             saveAllData={saveAllData}
+            settings={settings}
+            currentUser={currentUser}
+            onNavigate={(page) => setCurrentPage(page)}
           />
         );
       case 'import-stock':
@@ -3093,8 +3398,8 @@ export default function App() {
             stores={stores}
             expenses={expenses}
             currentStoreId={currentStoreId}
-            currency={settings.currency}
-            exchangeRate={settings.exchangeRate}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
             translate={t}
             posShifts={posShifts}
           />
@@ -3455,16 +3760,22 @@ export default function App() {
                 <label className="text-xs font-semibold text-gray-700">Display Currency</label>
                 <select
                   value={settings.currency}
-                  onChange={(e) => saveAllData({ settings: { ...settings, currency: e.target.value as 'USD' | 'TZS' } })}
+                  onChange={(e) => saveAllData({ settings: { ...settings, currency: e.target.value as any } })}
                   className="w-full px-3 py-2 border rounded-lg text-sm bg-white font-medium"
                 >
                   <option value="USD">USD ($)</option>
                   <option value="TZS">TZS (TSh)</option>
+                  <option value="KES">KES (KSh)</option>
+                  <option value="UGD">UGD (USh)</option>
+                  <option value="UGX">UGX (USh)</option>
+                  <option value="RWF">RWF (RF)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="GBP">GBP (£)</option>
                 </select>
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Exchange conversion (1 USD = X TZS)</label>
+                <label className="text-xs font-semibold text-gray-700">Exchange conversion (1 USD = X Local Units)</label>
                 <input
                   type="number"
                   step="any"
@@ -3523,8 +3834,10 @@ export default function App() {
                         if (window.confirm('Restore initial database registers? This will wipe your session changes.')) {
                           restoreFactoryDefaults();
                           setShowSettingsModal(false);
-                          alert('Database successfully restored! reloading window...');
-                          window.location.reload();
+                          toast.success(t('Database successfully restored! reloading window...'));
+                          setTimeout(() => {
+                            window.location.reload();
+                          }, 1500);
                         }
                       }}
                       className="w-full mt-2 py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs tracking-wider uppercase transition-colors"
@@ -3574,8 +3887,8 @@ export default function App() {
       {/* Product Add/Edit Modal */}
       {showStockModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50 shrink-0">
               <span className="font-bold text-gray-900 text-sm">
                 {editingStockItem ? 'Edit Product Parameters' : 'Add New Product'}
               </span>
@@ -3594,6 +3907,7 @@ export default function App() {
                 const pPrice = parseFloat(fd.get('purchasePrice') as string) || 0;
                 const rPrice = parseFloat(fd.get('retailPrice') as string) || 0;
                 const wPrice = parseFloat(fd.get('wholesalePrice') as string) || 0;
+                const partnerPrice = parseFloat(fd.get('partnerPrice') as string) || 0;
                 const lowLimit = parseInt(fd.get('lowStockQty') as string) || 5;
                 const imageUrl = (fd.get('imageUrl') as string) || '';
 
@@ -3611,13 +3925,14 @@ export default function App() {
                 const finalPPrice = settings.currency === 'TZS' ? pPrice / settings.exchangeRate : pPrice;
                 const finalRPrice = settings.currency === 'TZS' ? rPrice / settings.exchangeRate : rPrice;
                 const finalWPrice = settings.currency === 'TZS' ? wPrice / settings.exchangeRate : wPrice;
+                const finalPartnerPrice = settings.currency === 'TZS' ? partnerPrice / settings.exchangeRate : partnerPrice;
 
                 if (editingStockItem) {
                   const updated = stockItems.map(p => {
                     if (p.id === editingStockItem.id) {
                       return {
                         ...p, name, code, category: cat, unit,
-                        purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice,
+                        purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                         lowStockQty: lowLimit, imageUrl, expiryDate: expiryDate || undefined,
                         expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
                       };
@@ -3626,6 +3941,7 @@ export default function App() {
                   });
                   saveAllData({ stockItems: updated });
                   logAction('Updated Product', `Modified SKU parameters for ${code}`);
+                  toast.success(t('Product parameters updated successfully!'));
                 } else {
                   const maxId = stockItems.length > 0 ? Math.max(...stockItems.map(p => p.id)) : 0;
                   const pStockObj: Record<number, number> = {};
@@ -3634,17 +3950,18 @@ export default function App() {
                   const newProduct: StockItem = {
                     id: maxId + 1, name, code, category: cat, unit,
                     stock: pStockObj,
-                    purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice,
+                    purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                     lowStockQty: lowLimit, imageUrl,
                     expiryDate: expiryDate || undefined,
                     expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
                   };
                   saveAllData({ stockItems: [...stockItems, newProduct] });
                   logAction('Created Product', `Registered new inventory SKU: ${code}`);
+                  toast.success(t('New product registered successfully!'));
                 }
                 setShowStockModal(false);
               }}
-              className="p-5 space-y-4"
+              className="p-5 space-y-4 overflow-y-auto"
             >
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-700">Product Name</label>
@@ -3749,7 +4066,7 @@ export default function App() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-700">Retail Price</label>
                   <input
@@ -3758,7 +4075,7 @@ export default function App() {
                     name="retailPrice"
                     required
                     defaultValue={editingStockItem ? (settings.currency === 'TZS' ? editingStockItem.retailPrice * settings.exchangeRate : editingStockItem.retailPrice) : ''}
-                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
@@ -3769,7 +4086,18 @@ export default function App() {
                     name="wholesalePrice"
                     required
                     defaultValue={editingStockItem ? (settings.currency === 'TZS' ? editingStockItem.wholesalePrice * settings.exchangeRate : editingStockItem.wholesalePrice) : ''}
-                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-700">Partner Price</label>
+                  <input
+                    type="number"
+                    step="any"
+                    name="partnerPrice"
+                    required
+                    defaultValue={editingStockItem ? (settings.currency === 'TZS' ? (editingStockItem.partnerPrice || editingStockItem.retailPrice) * settings.exchangeRate : (editingStockItem.partnerPrice || editingStockItem.retailPrice)) : ''}
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
               </div>
@@ -3830,8 +4158,8 @@ export default function App() {
       {/* Stock Transfer Modal */}
       {showTransferModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50 shrink-0">
               <span className="font-bold text-gray-900 text-sm">Inter-Store Stock Transfer</span>
               <button onClick={() => setShowTransferModal(false)} className="p-1 hover:bg-gray-200 rounded">
                 <X className="w-5 h-5" />
@@ -3847,7 +4175,7 @@ export default function App() {
                 const qty = parseInt(fd.get('qty') as string);
 
                 if (fromStore === toStore) {
-                  alert('Please select two distinct stores.');
+                  toast.error(t('Please select two distinct stores.'));
                   return;
                 }
 
@@ -3855,26 +4183,28 @@ export default function App() {
                 if (!item) return;
 
                 if ((item.stock?.[fromStore] || 0) < qty) {
-                  alert('Insufficient stock weights in the source store.');
+                  toast.error(t('Insufficient stock weights in the source store.'));
                   return;
                 }
 
-                const updatedStock = stockItems.map(p => {
-                  if (p.id === pid) {
-                    const nextStockObj = { ...p.stock };
-                    nextStockObj[fromStore] = (nextStockObj[fromStore] || 0) - qty;
-                    nextStockObj[toStore] = (nextStockObj[toStore] || 0) + qty;
-                    return { ...p, stock: nextStockObj };
-                  }
-                  return p;
-                });
+                const maxId = stockTransfers.length > 0 ? Math.max(...stockTransfers.map(t => t.id)) : 0;
+                const newTransfer: StockTransfer = {
+                  id: maxId + 1,
+                  transferNumber: `TR-${new Date().getFullYear()}-${5000 + maxId + 1}`,
+                  productId: pid,
+                  fromStoreId: fromStore,
+                  toStoreId: toStore,
+                  qty: qty,
+                  status: 'Pending',
+                  createdAt: new Date().toISOString().split('T')[0]
+                };
 
-                saveAllData({ stockItems: updatedStock });
-                logAction('Stock Transfer', `Transferred ${qty}x ${item.name} inside active branch layout.`);
+                saveAllData({ stockTransfers: [...stockTransfers, newTransfer] });
+                logAction('Stock Transfer Request', `Requested transfer of ${qty}x ${item.name} from ${stores.find(s => s.id === fromStore)?.name} to ${stores.find(s => s.id === toStore)?.name}.`);
                 setShowTransferModal(false);
-                alert('Stock transfer completed successfully!');
+                toast.success(t('Stock transfer request registered as PENDING. Please dispatch it below.'));
               }}
-              className="p-5 space-y-4"
+              className="p-5 space-y-4 overflow-y-auto"
             >
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-700">Select Product</label>
@@ -3949,6 +4279,45 @@ export default function App() {
         title={confirmModal.title}
         description={confirmModal.description}
       />
+
+      {/* Toast Notifications Container */}
+      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+        {toasts.map(t => {
+          let bgColor = 'bg-white border-gray-200 text-gray-900';
+          let Icon = Info;
+          let iconColor = 'text-blue-500';
+
+          if (t.type === 'success') {
+            bgColor = 'bg-emerald-50 border-emerald-100 text-emerald-950';
+            Icon = CheckCircle;
+            iconColor = 'text-emerald-500';
+          } else if (t.type === 'error') {
+            bgColor = 'bg-rose-50 border-rose-100 text-rose-950';
+            Icon = XCircle;
+            iconColor = 'text-rose-500';
+          } else if (t.type === 'warning') {
+            bgColor = 'bg-amber-50 border-amber-100 text-amber-950';
+            Icon = AlertTriangle;
+            iconColor = 'text-amber-500';
+          }
+
+          return (
+            <div
+              key={t.id}
+              className={`pointer-events-auto p-4 rounded-xl border shadow-lg flex items-start gap-3 transition-all duration-300 transform translate-y-0 opacity-100 ${bgColor}`}
+            >
+              <Icon className={`w-5 h-5 shrink-0 ${iconColor} mt-0.5`} />
+              <div className="flex-1 text-xs font-semibold leading-normal">{t.message}</div>
+              <button
+                onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+                className="text-gray-400 hover:text-gray-600 transition shrink-0 p-0.5 rounded-lg hover:bg-black/5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

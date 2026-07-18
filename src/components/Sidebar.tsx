@@ -31,7 +31,7 @@ export default function Sidebar({
   onToggleCollapse
 }: SidebarProps) {
   // Helper for submenus to check if any of their children is active
-  const isMasterActive = ['companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery'].includes(currentPage);
+  const isMasterActive = ['companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate'].includes(currentPage);
   const isImportActive = ['import-stock', 'import-customers', 'import-suppliers'].includes(currentPage);
   const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts'].includes(currentPage);
   const isUserActive = ['user-info', 'user-access'].includes(currentPage);
@@ -165,7 +165,7 @@ export default function Sidebar({
         )}
 
         {/* MASTER DATA */}
-        {(isAllowed('companies') || isAllowed('branches') || isAllowed('stores') || isAllowed('customers') || isAllowed('suppliers')) && (
+        {(isAllowed('companies') || isAllowed('branches') || isAllowed('stores') || isAllowed('customers') || isAllowed('suppliers') || isAllowed('categories') || isAllowed('taxes') || isAllowed('data-recovery') || isAllowed('exchange-rate')) && (
           <div className="pt-2">
             <button
               onClick={() => {
@@ -264,6 +264,16 @@ export default function Sidebar({
                     }`}
                   >
                     ♻️ {t('Data Recovery')}
+                  </button>
+                )}
+                {isAllowed('exchange-rate') && (
+                  <button
+                    onClick={() => onNavigate('exchange-rate')}
+                    className={`w-full text-left px-3 py-1.5 rounded transition ${
+                      currentPage === 'exchange-rate' ? 'text-white font-bold' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    🌐 {t('Exchange Rates')}
                   </button>
                 )}
               </div>

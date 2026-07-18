@@ -48,6 +48,7 @@ export interface StockItem {
   purchasePrice: number;
   retailPrice: number;
   wholesalePrice: number;
+  partnerPrice?: number;
   lowStockQty: number;
   unit?: 'Kg' | 'Litres' | 'Package';
   imageUrl?: string;
@@ -85,7 +86,7 @@ export interface SalesOrder {
   customerId: number;
   storeId: number;
   date: string;
-  priceType: 'Retail' | 'Wholesale';
+  priceType: 'Retail' | 'Wholesale' | 'Preferred';
   items: SOItem[];
   total: number;
   profit: number;
@@ -121,7 +122,7 @@ export interface Supplier {
 export interface Customer {
   id: number;
   name: string;
-  type: 'Retail' | 'Wholesale';
+  type: 'Retail' | 'Wholesale' | 'Preferred';
   phone: string;
   email: string;
   creditLimit: number;
@@ -139,10 +140,16 @@ export interface AuditTrail {
   timestamp: string;
 }
 
+export type CurrencyType = 'USD' | 'TZS' | 'KES' | 'UGD' | 'UGX' | 'RWF' | 'EUR' | 'GBP';
+
 export interface Settings {
   language: 'en' | 'sw';
-  currency: 'USD' | 'TZS';
+  currency: CurrencyType;
   exchangeRate: number;
+  companyCurrencies?: Record<number, CurrencyType>;
+  companyExchangeRates?: Record<number, number>;
+  userCurrencies?: Record<string, CurrencyType>;
+  userExchangeRates?: Record<string, number>;
 }
 
 export interface PosShift {
@@ -159,5 +166,18 @@ export interface PosShift {
   status: 'Open' | 'Closed';
   variance?: number;
   notes?: string;
+}
+
+export interface StockTransfer {
+  id: number;
+  transferNumber: string;
+  productId: number;
+  fromStoreId: number;
+  toStoreId: number;
+  qty: number;
+  status: 'Pending' | 'In-Transit' | 'Completed' | 'Rejected';
+  createdAt: string;
+  sentAt?: string;
+  receivedAt?: string;
 }
 

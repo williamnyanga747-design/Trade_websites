@@ -4,6 +4,7 @@ import {
   Plus, Pencil, Trash2, ShieldAlert, Copy, CheckCircle, X
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
+import { toast } from '../utils/toast';
 
 interface ManageUsersProps {
   currentPage: string;
@@ -48,6 +49,11 @@ export default function ManageUsers({
   const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null);
   const [selectedStaffPages, setSelectedStaffPages] = useState<string[]>([]);
   const [lastSyncedStaffId, setLastSyncedStaffId] = useState<number | null>(null);
+
+  // Security Telemetry Panel filters
+  const [telemetrySearch, setTelemetrySearch] = useState('');
+  const [telemetryCategory, setTelemetryCategory] = useState('All');
+  const [telemetryUser, setTelemetryUser] = useState('All');
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -155,14 +161,14 @@ export default function ManageUsers({
       const updatedUsers = users.map(u => u.id === userId ? { ...u, status } : u);
       saveAllData({ users: updatedUsers });
       logAction(blockBool ? 'Blocked Account' : 'Unblocked Account', `Root mandate changed scope accessibility of ${target.username} to ${status}`);
-      alert(`${t('Account')} ${target.name} has been ${blockBool ? t('blocked') : t('unblocked')}.`);
+      toast.success(`${t('Account')} ${target.name} has been ${blockBool ? t('blocked') : t('unblocked')}.`);
     }
   };
 
   // Delete user handler
   const handleDeleteUser = (id: number) => {
     if (id === currentUser?.id) {
-      alert(t('Cannot self-terminate active session!'));
+      toast.error(t('Cannot self-terminate active session!'));
       return;
     }
 
@@ -170,7 +176,7 @@ export default function ManageUsers({
     if (!target) return;
 
     if (target.username === 'root_mandate') {
-      alert(t('Super Admin is locked and cannot be deleted'));
+      toast.error(t('Super Admin is locked and cannot be deleted'));
       return;
     }
 
@@ -180,20 +186,20 @@ export default function ManageUsers({
     if (!isFounder) {
       // Non-founders cannot delete the global superadmin
       if (target.username === 'superadmin') {
-        alert(t('Global Super Admin is locked and cannot be deleted'));
+        toast.error(t('Global Super Admin is locked and cannot be deleted'));
         return;
       }
 
       // If not even global super admin, apply company admin checks
       if (!isGlobalSA) {
         if (target.role === 'Super Admin') {
-          alert(t('Insufficient authorization scope'));
+          toast.error(t('Insufficient authorization scope'));
           return;
         }
 
         // Company Admin of the company can add/delete his/her own staff
         if (target.companyId !== currentCompanyId) {
-          alert(t('Cannot delete users from other companies'));
+          toast.error(t('Cannot delete users from other companies'));
           return;
         }
       }
@@ -214,7 +220,7 @@ export default function ManageUsers({
   // Copy password helper
   const copyUserPassword = (pwd: string) => {
     navigator.clipboard.writeText(pwd);
-    alert(t('Password copied to clipboard!'));
+    toast.success(t('Password copied to clipboard!'));
   };
 
   // Save matrix permissions handler
@@ -247,7 +253,7 @@ export default function ManageUsers({
 
     saveAllData({ rolePermissions: updatedPermissions });
     logAction('Updated Permissions Matrix', 'Custom operational permissions modified.');
-    alert(t('Operational parameters updated successfully'));
+    toast.success(t('Operational parameters updated successfully'));
   };
 
   // Modal Save handler
@@ -265,7 +271,7 @@ export default function ManageUsers({
       const updated = users.map(u => u.id === data.id ? data : u);
       saveAllData({ users: updated });
       logAction('Edited User', `Modified user details for ${data.username}`);
-      alert(t('User saved'));
+      toast.success(t('User saved'));
     } else {
       // Create
       const nextId = Math.max(0, ...users.map(u => u.id)) + 1;
@@ -277,7 +283,7 @@ export default function ManageUsers({
       };
       saveAllData({ users: [...users, newUser] });
       logAction('Added User', `Registered platform account: ${data.username}`);
-      alert(t('User saved'));
+      toast.success(t('User saved'));
     }
 
     setEditingUser(null);
@@ -465,11 +471,12 @@ export default function ManageUsers({
             <table className="w-full text-left text-xs">
               <thead className="bg-gray-50 border-b text-gray-500 font-bold uppercase">
                 <tr>
-                  <th className="p-3">Timestamp</th>
-                  <th className="p-3">Operator</th>
-                  <th className="p-3">Role</th>
-                  <th className="p-3">Action Perform</th>
-                  <th className="p-3">Details</th>
+                  <th className="p-3">{t('Timestamp')}</th>
+                  <th className="p-3">{t('Operator')}</th>
+                  <th className="p-3">{t('Role')}</th>
+                  <th className="p-3">{t('Action Perform')}</th>
+                  <th className="p-3">{t('Details')}</th>
+                  <th className="p-3 text-right">{t('Actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y text-gray-700 font-medium">
@@ -480,12 +487,34 @@ export default function ManageUsers({
                     <td className="p-3"><span className="px-2 py-0.5 rounded text-[10px] bg-gray-100 font-bold border">{t(l.role)}</span></td>
                     <td className="p-3 font-bold text-brand">{l.action}</td>
                     <td className="p-3 font-mono text-gray-600 max-w-md truncate">{l.details}</td>
+                    <td className="p-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmModal({
+                            isOpen: true,
+                            title: t('Delete Core Audit Trail'),
+                            description: t('Are you sure you want to permanently delete this core system action audit trail log? This action is irreversible.'),
+                            onConfirm: () => {
+                              const remaining = auditTrails.filter(item => item.id !== l.id);
+                              saveAllData({ auditTrails: remaining });
+                              toast.success(t('Core action log deleted successfully.'));
+                              logAction('Delete Core Action Log', `Permanently deleted core audit log ID: ${l.id}`);
+                            }
+                          });
+                        }}
+                        className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50 transition inline-flex items-center"
+                        title={t('Delete Log')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {logs.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-4 text-center text-gray-400 font-semibold">
-                      No core action audits captured yet.
+                    <td colSpan={6} className="p-4 text-center text-gray-400 font-semibold">
+                      {t('No core action audits captured yet.')}
                     </td>
                   </tr>
                 )}
@@ -547,7 +576,7 @@ export default function ManageUsers({
       
       const targetUser = users.find(u => u.id === activeStaffId);
       logAction('Updated Staff Permissions', `Customized operational pages for operator ${targetUser?.username}`);
-      alert(t('Permissions saved successfully!'));
+      toast.success(t('Permissions saved successfully!'));
     };
 
     return (
@@ -722,6 +751,238 @@ export default function ManageUsers({
             </div>
           )}
         </div>
+
+        {/* --- SECURITY TELEMETRY AUDIT TRAIL PANEL --- */}
+        {(() => {
+          let telemetryLogs = [...auditTrails];
+
+          // Filter audit logs as requested by administrative levels
+          if (currentUser?.username !== 'root_mandate') {
+            telemetryLogs = telemetryLogs.filter(l => l.username !== 'root_mandate');
+          }
+          if (currentUser?.role !== 'Super Admin') {
+            telemetryLogs = telemetryLogs.filter(l => l.username !== 'superadmin');
+          }
+          if (!isSuperAdmin) {
+            telemetryLogs = telemetryLogs.filter(l => l.role !== 'Super Admin' && l.companyId === currentCompanyId);
+          }
+
+          // Filter by Category
+          if (telemetryCategory !== 'All') {
+            telemetryLogs = telemetryLogs.filter(l => {
+              const actionLower = l.action.toLowerCase();
+              const detailsLower = l.details.toLowerCase();
+              if (telemetryCategory === 'Deletions') {
+                return actionLower.includes('delete') || actionLower.includes('trash') || actionLower.includes('remove') || actionLower.includes('void');
+              }
+              if (telemetryCategory === 'Price changes') {
+                return actionLower.includes('price') || detailsLower.includes('price');
+              }
+              if (telemetryCategory === 'Settings') {
+                return actionLower.includes('settings') || actionLower.includes('permissions') || actionLower.includes('matrix') || detailsLower.includes('settings');
+              }
+              if (telemetryCategory === 'Checkout/POS') {
+                return actionLower.includes('pos') || actionLower.includes('checkout') || actionLower.includes('shift') || detailsLower.includes('checkout');
+              }
+              if (telemetryCategory === 'User Access') {
+                return actionLower.includes('user') || actionLower.includes('account') || actionLower.includes('permissions') || detailsLower.includes('permissions');
+              }
+              return true;
+            });
+          }
+
+          // Filter by User / Operator
+          if (telemetryUser !== 'All') {
+            telemetryLogs = telemetryLogs.filter(l => l.username === telemetryUser);
+          }
+
+          // Filter by Search Query
+          if (telemetrySearch.trim()) {
+            const q = telemetrySearch.toLowerCase();
+            telemetryLogs = telemetryLogs.filter(l => 
+              l.username.toLowerCase().includes(q) ||
+              l.action.toLowerCase().includes(q) ||
+              l.details.toLowerCase().includes(q) ||
+              l.timestamp.toLowerCase().includes(q)
+            );
+          }
+
+          // Find unique operators for dropdown lists
+          const uniqueOperators = Array.from(new Set(auditTrails.map(l => l.username)));
+
+          const handleExportTelemetryCSV = () => {
+            const headers = ['Timestamp', 'Operator', 'Role', 'Action Performed', 'Details'];
+            const rows = telemetryLogs.map(l => [
+              l.timestamp,
+              l.username,
+              l.role,
+              l.action,
+              l.details.replace(/"/g, '""') // escape quotes
+            ]);
+            const csvContent = [
+              headers.join(','),
+              ...rows.map(r => r.map(val => `"${val}"`).join(','))
+            ].join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `Audit_Trail_Security_Telemetry_${new Date().toISOString().split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            toast.success(t('Successfully exported security telemetry logs to CSV!'));
+          };
+
+          return (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mt-6">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6 border-b pb-4">
+                <div>
+                  <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                    <ShieldAlert className="w-5 h-5 text-red-600 animate-pulse" />
+                    {t('Security Telemetry & System Audit Ledger')}
+                  </h3>
+                  <p className="text-xs text-gray-500 font-semibold mt-1">
+                    {t('Query, inspect, and export real-time cryptographically separated access logs and operator footprints.')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportTelemetryCSV}
+                  disabled={telemetryLogs.length === 0}
+                  className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1.5 transition ml-auto lg:ml-0"
+                >
+                  📊 {t('Export Audit (CSV)')}
+                </button>
+              </div>
+
+              {/* Controls row */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Search Telemetry')}</label>
+                  <input
+                    type="text"
+                    value={telemetrySearch}
+                    onChange={e => setTelemetrySearch(e.target.value)}
+                    placeholder={t('Search by operator, details...')}
+                    className="w-full px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-semibold outline-none focus:border-brand"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Action Category')}</label>
+                  <select
+                    value={telemetryCategory}
+                    onChange={e => setTelemetryCategory(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-semibold outline-none"
+                  >
+                    <option value="All">{t('All Categories')}</option>
+                    <option value="Deletions">{t('Deletions & Destructive Acts')}</option>
+                    <option value="Price changes">{t('Price adjustments & Book updates')}</option>
+                    <option value="Settings">{t('Settings & Matrix modifications')}</option>
+                    <option value="Checkout/POS">{t('Register sessions & POS sales')}</option>
+                    <option value="User Access">{t('Access tokens & User credentials')}</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Operator Username')}</label>
+                  <select
+                    value={telemetryUser}
+                    onChange={e => setTelemetryUser(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-semibold outline-none"
+                  >
+                    <option value="All">{t('All Operators')}</option>
+                    {uniqueOperators.map(op => (
+                      <option key={op} value={op}>@{op}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Audit ledger table */}
+              <div className="overflow-x-auto border rounded-xl shadow-xs">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-gray-100 border-b text-gray-500 uppercase font-black text-[10px] tracking-wider">
+                    <tr>
+                      <th className="px-4 py-3">{t('Timestamp')}</th>
+                      <th className="px-4 py-3">{t('Operator')}</th>
+                      <th className="px-4 py-3">{t('System Role')}</th>
+                      <th className="px-4 py-3 text-brand">{t('Audited Event')}</th>
+                      <th className="px-4 py-3">{t('Footprint Details')}</th>
+                      <th className="px-4 py-3 text-right">{t('Actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 font-semibold text-gray-700 bg-white">
+                    {telemetryLogs.map(l => {
+                      const isDestructive = l.action.toLowerCase().includes('delete') || l.action.toLowerCase().includes('block') || l.action.toLowerCase().includes('revoke');
+                      return (
+                        <tr key={l.id} className="hover:bg-gray-50/50 transition">
+                          <td className="px-4 py-3 text-gray-400 font-mono text-[10px] whitespace-nowrap">{l.timestamp}</td>
+                          <td className="px-4 py-3 font-bold text-gray-900">
+                            <span className="font-mono">@{l.username}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                              l.role === 'Super Admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                              l.role === 'Admin' ? 'bg-red-50 text-red-700 border border-red-200' :
+                              'bg-gray-100 text-gray-700 border'
+                            }`}>
+                              {t(l.role)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-bold">
+                            <span className={`px-2 py-0.5 rounded text-[10px] ${
+                              isDestructive 
+                                ? 'bg-red-50 text-red-700 border border-red-100' 
+                                : 'bg-brand/5 text-brand border border-brand/10'
+                            }`}>
+                              {t(l.action)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-gray-600 text-[11px] max-w-lg break-all">
+                            {t(l.details)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmModal({
+                                  isOpen: true,
+                                  title: t('Delete Telemetry Log'),
+                                  description: t('Are you sure you want to permanently delete this security telemetry audit log? This action is irreversible.'),
+                                  onConfirm: () => {
+                                    const remaining = auditTrails.filter(item => item.id !== l.id);
+                                    saveAllData({ auditTrails: remaining });
+                                    toast.success(t('Telemetry log deleted successfully.'));
+                                    logAction('Delete Telemetry Log', `Permanently deleted telemetry audit log ID: ${l.id}`);
+                                  }
+                                });
+                              }}
+                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50 transition inline-flex items-center"
+                              title={t('Delete Telemetry Log')}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {telemetryLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="p-12 text-center text-gray-400 font-medium">
+                          <ShieldAlert className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                          {t('No security telemetry footprint logs matched your filters.')}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }

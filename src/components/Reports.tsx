@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expense, PosShift } from '../types';
 import { formatMoney } from '../utils/format';
+import { toast } from '../utils/toast';
 import {
   FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar
 } from 'lucide-react';
@@ -17,7 +18,7 @@ interface ReportsProps {
   stores: Store[];
   expenses?: Expense[];
   currentStoreId: number | null;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   translate: (text: string) => string;
   posShifts?: PosShift[];
@@ -84,7 +85,7 @@ export default function Reports({
   const handleExportCSV = (tableId: string, title: string) => {
     const table = document.getElementById(tableId);
     if (!table) {
-      alert(t('No data table found to export'));
+      toast.warning(t('No data table found to export'));
       return;
     }
 

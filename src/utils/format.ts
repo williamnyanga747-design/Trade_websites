@@ -175,14 +175,30 @@ export function translate(text: string, language: 'en' | 'sw'): string {
   return englishText;
 }
 
-export function formatMoney(amount: number, currency: 'USD' | 'TZS', exchangeRate: number): string {
-  const rate = currency === 'TZS' ? exchangeRate : 1;
+export type CurrencyType = 'USD' | 'TZS' | 'KES' | 'UGD' | 'UGX' | 'RWF' | 'EUR' | 'GBP';
+
+export function formatMoney(amount: number, currency: string, exchangeRate: number): string {
+  const rate = currency === 'USD' ? 1 : exchangeRate;
   const convertedAmount = amount * rate;
-  const symbol = currency === 'TZS' ? 'TSh ' : '$';
+  
+  const symbols: Record<string, string> = {
+    USD: '$',
+    TZS: 'TSh ',
+    KES: 'KSh ',
+    UGD: 'USh ',
+    UGX: 'USh ',
+    RWF: 'RF ',
+    EUR: '€',
+    GBP: '£'
+  };
+  const symbol = symbols[currency] !== undefined ? symbols[currency] : `${currency} `;
+  
+  const zeroDecimalCurrencies = ['TZS', 'KES', 'UGD', 'UGX', 'RWF'];
+  const decimals = zeroDecimalCurrencies.includes(currency) ? 0 : 2;
   
   return symbol + convertedAmount.toLocaleString('en-US', {
-    minimumFractionDigits: currency === 'TZS' ? 0 : 2,
-    maximumFractionDigits: currency === 'TZS' ? 0 : 2
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
   });
 }
 

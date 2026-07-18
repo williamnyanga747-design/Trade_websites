@@ -8,6 +8,7 @@ import {
 import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { performCascadeDelete } from '../utils/cascadeDelete';
+import { toast } from '../utils/toast';
 
 interface MasterDataProps {
   currentPage: string;
@@ -25,11 +26,14 @@ interface MasterDataProps {
   currentStoreId: number | null;
   isAdmin: boolean;
   isSuperAdmin: boolean;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   translate: (text: string) => string;
   logAction: (action: string, details: string) => void;
   saveAllData: (updatedFields: any) => void;
+  settings?: any;
+  currentUser?: any;
+  onNavigate?: (page: string) => void;
 }
 
 export default function MasterData({
@@ -52,10 +56,17 @@ export default function MasterData({
   exchangeRate,
   translate: t,
   logAction,
-  saveAllData
+  saveAllData,
+  settings,
+  currentUser,
+  onNavigate
 }: MasterDataProps) {
   const [editingItem, setEditingItem] = useState<{ type: string; data: any } | null>(null);
   const [activeStoreDetailsId, setActiveStoreDetailsId] = useState<number | null>(null);
+
+  const [localCompanyRates, setLocalCompanyRates] = useState<Record<number, string>>({});
+  const [localUserRates, setLocalUserRates] = useState<Record<string, string>>({});
+  const [localGlobalRate, setLocalGlobalRate] = useState<string>('');
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -398,7 +409,7 @@ export default function MasterData({
       if (!data.name?.trim()) return;
       const newCatName = data.name.trim();
       if (categories.includes(newCatName)) {
-        alert(t('Category already exists!'));
+        toast.warning(t('Category already exists!'));
         return;
       }
       saveAllData({ categories: [...categories, newCatName] });
@@ -775,7 +786,11 @@ export default function MasterData({
                   <tr key={c.id} className="hover:bg-gray-50/50">
                     <td className="px-6 py-4 font-bold text-gray-900">{c.name}</td>
                     <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${c.type === 'Wholesale' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        c.type === 'Wholesale' ? 'bg-amber-100 text-amber-800' :
+                        c.type === 'Preferred' ? 'bg-indigo-100 text-indigo-800' :
+                        'bg-blue-100 text-blue-800'
+                      }`}>
                         {t(c.type)}
                       </span>
                     </td>
@@ -1183,6 +1198,311 @@ export default function MasterData({
         </div>
       );
 
+    case 'exchange-rate':
+      const currentGlobalRate = settings?.exchangeRate || 1;
+      const currentGlobalCurrency = settings?.currency || 'USD';
+
+      const handleUpdateGlobalSettings = (newCurrency: string, newRate: number) => {
+        const nextSettings = {
+          ...settings,
+          currency: newCurrency,
+          exchangeRate: newRate
+        };
+        saveAllData({ settings: nextSettings });
+        toast.success(t('Global fallback exchange rate settings updated.'));
+        logAction('Update Global Exchange Rate', `Set global fallback: 1 USD = ${newRate} ${newCurrency}, currency: ${newCurrency}`);
+      };
+
+      const handleUpdateCompanySettings = (compId: number, newCurrency: string, newRate: number) => {
+        const nextSettings = {
+          ...settings,
+          companyCurrencies: {
+            ...(settings?.companyCurrencies || {}),
+            [compId]: newCurrency
+          },
+          companyExchangeRates: {
+            ...(settings?.companyExchangeRates || {}),
+            [compId]: newRate
+          }
+        };
+        saveAllData({ settings: nextSettings });
+        toast.success(t('Company isolated currency settings updated successfully.'));
+        logAction('Update Company Exchange Rate', `Set company (ID: ${compId}) rate: 1 USD = ${newRate} ${newCurrency}, currency: ${newCurrency}`);
+      };
+
+      const handleUpdateUserSettings = (username: string, newCurrency: string, newRate: number | null) => {
+        const nextUserCurrencies = { ...(settings?.userCurrencies || {}) };
+        const nextUserRates = { ...(settings?.userExchangeRates || {}) };
+
+        if (newCurrency === '') {
+          delete nextUserCurrencies[username];
+        } else {
+          nextUserCurrencies[username] = newCurrency;
+        }
+
+        if (newRate === null) {
+          delete nextUserRates[username];
+        } else {
+          nextUserRates[username] = newRate;
+        }
+
+        const nextSettings = {
+          ...settings,
+          userCurrencies: nextUserCurrencies,
+          userExchangeRates: nextUserRates
+        };
+        saveAllData({ settings: nextSettings });
+        toast.success(t('User specific override settings updated successfully.'));
+        logAction('Update User Exchange Rate Override', `Set user (${username}) rate: ${newRate !== null ? `1 USD = ${newRate} TZS` : 'Reset'}, currency: ${newCurrency || 'Reset'}`);
+      };
+
+      return (
+        <div className="space-y-6 max-w-4xl mx-auto">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-indigo-600 to-brand text-white rounded-xl p-5 shadow-sm">
+            <h3 className="font-bold text-base flex items-center gap-2">
+              🌐 {t('System Exchange Rate Controller')}
+            </h3>
+            <p className="text-xs text-indigo-100 mt-1 max-w-xl">
+              {t('Configure independent currency and exchange rate operations per Company and override them per individual User. This ensures independent, localized transaction calculation across different organizations.')}
+            </p>
+          </div>
+
+          {/* Section 1: Isolated Company Exchange Rates */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+              <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                🏢 {t('Company Isolated Rates & Currencies')}
+              </h4>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px] text-left">
+                <thead className="bg-gray-50 border-b text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3">{t('Company')}</th>
+                    <th className="px-6 py-3">{t('Active Currency')}</th>
+                    <th className="px-6 py-3">{t('Exchange Rate (1 USD = Local)')}</th>
+                    <th className="px-6 py-3 text-right">{t('Action')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {companies.filter(c => !c.isDeleted).map(c => {
+                    const companyCurrency = settings?.companyCurrencies?.[c.id] || currentGlobalCurrency;
+                    const companyRate = settings?.companyExchangeRates?.[c.id] !== undefined ? settings.companyExchangeRates[c.id] : currentGlobalRate;
+                    const rateInputVal = localCompanyRates[c.id] !== undefined ? localCompanyRates[c.id] : String(companyRate);
+
+                    return (
+                      <tr key={c.id} className="hover:bg-gray-50/30">
+                        <td className="px-6 py-4 font-bold text-gray-900">{c.name}</td>
+                        <td className="px-6 py-4">
+                          <select
+                            value={companyCurrency}
+                            onChange={(e) => handleUpdateCompanySettings(c.id, e.target.value, companyRate)}
+                            className="bg-white border border-gray-300 rounded-lg text-xs font-semibold px-2 py-1 outline-none focus:border-brand"
+                          >
+                            <option value="USD">USD ($)</option>
+                            <option value="TZS">TZS (TSh)</option>
+                            <option value="KES">KES (KSh)</option>
+                            <option value="UGD">UGD (USh)</option>
+                            <option value="UGX">UGX (USh)</option>
+                            <option value="RWF">RWF (RF)</option>
+                            <option value="EUR">EUR (€)</option>
+                            <option value="GBP">GBP (£)</option>
+                          </select>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              step="any"
+                              value={rateInputVal}
+                              onChange={(e) => setLocalCompanyRates({ ...localCompanyRates, [c.id]: e.target.value })}
+                              className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-xs font-black outline-none focus:border-brand"
+                              placeholder="e.g. 2500"
+                            />
+                            <span className="text-[10px] font-bold text-gray-400">{companyCurrency}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => {
+                              const inputFloat = parseFloat(rateInputVal);
+                              if (!isNaN(inputFloat) && inputFloat > 0) {
+                                handleUpdateCompanySettings(c.id, companyCurrency, inputFloat);
+                              } else {
+                                toast.error(t('Please enter a valid exchange rate.'));
+                              }
+                            }}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 hover:text-indigo-800 px-3 py-1 text-xs font-bold rounded-lg transition"
+                          >
+                            {t('Apply')}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Section 2: Personal / User Override Settings */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+              <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                👤 {t('User Level Specific Overrides')}
+              </h4>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px] text-left">
+                <thead className="bg-gray-50 border-b text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3">{t('User')}</th>
+                    <th className="px-6 py-3">{t('Company / Role')}</th>
+                    <th className="px-6 py-3">{t('Currency Override')}</th>
+                    <th className="px-6 py-3">{t('Exchange Override (1 USD = Local)')}</th>
+                    <th className="px-6 py-3 text-right">{t('Action')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {users.filter(u => u.status === 'Active').map(u => {
+                    const userCurrency = settings?.userCurrencies?.[u.username] || '';
+                    const userRate = settings?.userExchangeRates?.[u.username];
+                    const rateInputVal = localUserRates[u.username] !== undefined ? localUserRates[u.username] : (userRate !== undefined ? String(userRate) : '');
+                    const belongsToCompany = companies.find(c => c.id === u.companyId)?.name || t('Global / Super');
+
+                    return (
+                      <tr key={u.id} className="hover:bg-gray-50/30">
+                        <td className="px-6 py-4 font-bold text-gray-900">
+                          <div>{u.name}</div>
+                          <div className="text-[10px] text-gray-400 font-mono">@{u.username}</div>
+                        </td>
+                        <td className="px-6 py-4 text-gray-500 font-semibold text-xs">
+                          <div>{belongsToCompany}</div>
+                          <div className="text-[10px] text-indigo-600 uppercase font-black tracking-wider">{u.role}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <select
+                            value={userCurrency}
+                            onChange={(e) => handleUpdateUserSettings(u.username, e.target.value, userRate !== undefined ? userRate : null)}
+                            className="bg-white border border-gray-300 rounded-lg text-xs font-semibold px-2 py-1 outline-none focus:border-brand"
+                          >
+                            <option value="">{t('No Override (Inherit)')}</option>
+                            <option value="USD">USD ($)</option>
+                            <option value="TZS">TZS (TSh)</option>
+                            <option value="KES">KES (KSh)</option>
+                            <option value="UGD">UGD (USh)</option>
+                            <option value="UGX">UGX (USh)</option>
+                            <option value="RWF">RWF (RF)</option>
+                            <option value="EUR">EUR (€)</option>
+                            <option value="GBP">GBP (£)</option>
+                          </select>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              step="any"
+                              value={rateInputVal}
+                              onChange={(e) => setLocalUserRates({ ...localUserRates, [u.username]: e.target.value })}
+                              className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-xs font-black outline-none focus:border-brand"
+                              placeholder={t('Inherit')}
+                            />
+                            <span className="text-[10px] font-bold text-gray-400">{userCurrency || t('Inherit')}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right flex items-center justify-end gap-1.5 pt-6">
+                          <button
+                            onClick={() => {
+                              const inputFloat = parseFloat(rateInputVal);
+                              if (rateInputVal === '') {
+                                handleUpdateUserSettings(u.username, userCurrency, null);
+                              } else if (!isNaN(inputFloat) && inputFloat > 0) {
+                                handleUpdateUserSettings(u.username, userCurrency, inputFloat);
+                              } else {
+                                toast.error(t('Please enter a valid rate or clear the input.'));
+                              }
+                            }}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1 text-xs font-bold rounded-lg transition"
+                          >
+                            {t('Apply')}
+                          </button>
+                          {(userCurrency !== '' || userRate !== undefined) && (
+                            <button
+                              onClick={() => {
+                                handleUpdateUserSettings(u.username, '', null);
+                                setLocalUserRates({ ...localUserRates, [u.username]: '' });
+                              }}
+                              className="bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1 text-xs font-bold rounded-lg transition"
+                              title={t('Clear overrides')}
+                            >
+                              {t('Clear')}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Section 3: Global Falling System Backups */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden p-5">
+            <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider mb-3">
+              🌍 {t('System Global Fallback Settings')}
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+              <div>
+                <label className="text-xs font-bold text-gray-600 mb-1.5 block uppercase tracking-wider">{t('Global Currency Fallback')}</label>
+                <select
+                  value={currentGlobalCurrency}
+                  onChange={(e) => handleUpdateGlobalSettings(e.target.value, currentGlobalRate)}
+                  className="bg-white border border-gray-300 rounded-lg text-xs font-semibold px-3 py-2 w-full outline-none focus:border-brand"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="TZS">TZS (TSh)</option>
+                  <option value="KES">KES (KSh)</option>
+                  <option value="UGD">UGD (USh)</option>
+                  <option value="UGX">UGX (USh)</option>
+                  <option value="RWF">RWF (RF)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="GBP">GBP (£)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-600 mb-1.5 block uppercase tracking-wider">{t(`Global Exchange Rate Fallback (1 USD = ${currentGlobalCurrency})`)}</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="any"
+                    value={localGlobalRate !== '' ? localGlobalRate : String(currentGlobalRate)}
+                    onChange={(e) => setLocalGlobalRate(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-xs font-black outline-none focus:border-brand"
+                    placeholder="1"
+                  />
+                  <button
+                    onClick={() => {
+                      const inputFloat = parseFloat(localGlobalRate !== '' ? localGlobalRate : String(currentGlobalRate));
+                      if (!isNaN(inputFloat) && inputFloat > 0) {
+                        handleUpdateGlobalSettings(currentGlobalCurrency, inputFloat);
+                        setLocalGlobalRate('');
+                      } else {
+                        toast.error(t('Please enter a valid rate.'));
+                      }
+                    }}
+                    className="bg-brand hover:bg-brand-hover text-white px-4 py-2 text-xs font-bold rounded-lg transition shrink-0"
+                  >
+                    {t('Apply')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
     default:
       return null;
   }
@@ -1289,7 +1609,7 @@ export default function MasterData({
                               const file = e.target.files?.[0];
                               if (file) {
                                 if (file.size > 1.5 * 1024 * 1024) {
-                                  alert(t('Image size exceeds 1.5MB limit. Please select a smaller image.'));
+                                  toast.error(t('Image size exceeds 1.5MB limit. Please select a smaller image.'));
                                   return;
                                 }
                                 const reader = new FileReader();
@@ -1454,6 +1774,7 @@ export default function MasterData({
                     >
                       <option value="Retail">{t('Retail')}</option>
                       <option value="Wholesale">{t('Wholesale')}</option>
+                      <option value="Preferred">{t('Preferred Partner')}</option>
                     </select>
                   </div>
                   <div>
@@ -1604,9 +1925,45 @@ export default function MasterData({
     );
   }
 
+  const tabs = [
+    { id: 'companies', label: t('Companies'), icon: '🏢', visible: isSuperAdmin },
+    { id: 'branches', label: t('Branches'), icon: '🌿', visible: isSuperAdmin || isAdmin },
+    { id: 'stores', label: t('Store Management'), icon: '🏪', visible: true },
+    { id: 'customers', label: t('Customers'), icon: '👥', visible: true },
+    { id: 'suppliers', label: t('Suppliers'), icon: '🤝', visible: true },
+    { id: 'categories', label: t('Stock Categories'), icon: '📁', visible: true },
+    { id: 'taxes', label: t('Manage Taxes'), icon: '📊', visible: true },
+    { id: 'data-recovery', label: t('Data Recovery'), icon: '♻️', visible: isSuperAdmin || isAdmin },
+    { id: 'exchange-rate', label: t('Exchange Rates'), icon: '🌐', visible: isSuperAdmin || isAdmin },
+  ].filter(tab => tab.visible);
+
   return (
-    <>
+    <div className="space-y-6">
+      {/* Horizontal Tab Navigation Bar inside Master Data */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-2 max-w-4xl mx-auto overflow-x-auto scrollbar-none no-print">
+        <div className="flex items-center gap-1 min-w-max">
+          {tabs.map((tab) => {
+            const isActive = currentPage === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => onNavigate && onNavigate(tab.id)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                  isActive
+                    ? 'bg-brand text-white shadow-xs'
+                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100/80'
+                }`}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {content}
+
       <ConfirmActionModal
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
@@ -1614,6 +1971,6 @@ export default function MasterData({
         title={confirmModal.title}
         description={confirmModal.description}
       />
-    </>
+    </div>
   );
 }

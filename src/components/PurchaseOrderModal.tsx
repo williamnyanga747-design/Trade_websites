@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Supplier, StockItem, PurchaseOrder, Store, Settings, POItem } from '../types';
 import { X, Search, Plus, Minus, Trash2, FileText, AlertTriangle, CheckCircle, Info } from 'lucide-react';
 import { formatMoney } from '../utils/format';
+import { toast } from '../utils/toast';
 
 interface PurchaseOrderModalProps {
   isOpen: boolean;
@@ -159,9 +160,9 @@ export default function PurchaseOrderModal({
     logAction('Created PO', `${receiveImmediately ? 'Logged and Received' : 'Drafted'} Purchase Order ${poNum} for supplier ${selectedSupplier?.name || 'Unknown'}`);
     
     if (receiveImmediately) {
-      alert(`${t('Purchase Order registered and inventory values successfully added!')} Code: ${poNum}`);
+      toast.success(`${t('Purchase Order registered and inventory values successfully added!')} Code: ${poNum}`);
     } else {
-      alert(`${t('Purchase Invoice drafted successfully!')} Code: ${poNum}. ${t('Click \'Receive\' inside the Purchase tab to transfer items to stock.')}`);
+      toast.success(`${t('Purchase Invoice drafted successfully!')} Code: ${poNum}. ${t('Click \'Receive\' inside the Purchase tab to transfer items to stock.')}`);
     }
 
     onClose();

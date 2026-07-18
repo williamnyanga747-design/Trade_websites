@@ -17,7 +17,7 @@ interface ReceiptsProps {
   suppliers: Supplier[];
   stockItems: StockItem[];
   currentStoreId: number | null;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   translate: (t: string) => string;
   currentUser: User | null;

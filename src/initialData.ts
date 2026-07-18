@@ -16,7 +16,7 @@ export const defaultSettings: Settings = {
 export const defaultRolePermissions: Record<string, string[]> = {
   'Super Admin': [
     'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
-    'companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery',
+    'companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate',
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase',
     'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts',
@@ -24,7 +24,7 @@ export const defaultRolePermissions: Record<string, string[]> = {
   ],
   'Admin': [
     'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
-    'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery',
+    'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate',
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase',
     'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts',

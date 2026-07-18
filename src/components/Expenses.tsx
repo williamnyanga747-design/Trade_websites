@@ -9,7 +9,7 @@ interface ExpensesProps {
   expenses: Expense[];
   stores: Store[];
   currentStoreId: number | null;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   isAdmin: boolean;
   logAction: (action: string, details: string) => void;

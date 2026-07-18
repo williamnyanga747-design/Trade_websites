@@ -14,7 +14,7 @@ interface FinancialReportProps {
   stockItems: StockItem[];
   stores: Store[];
   currentStoreId: number | null;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   language?: 'en' | 'sw';
 }

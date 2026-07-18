@@ -8,7 +8,7 @@ interface PDFGeneratorParams {
   store: Store | null;
   stockItems: StockItem[];
   currentUser: User | null;
-  currency: 'USD' | 'TZS';
+  currency: string;
   exchangeRate: number;
   language: 'en' | 'sw';
   companyDetails: {

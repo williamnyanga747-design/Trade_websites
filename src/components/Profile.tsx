@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { UserCircle, Mail, Key, LogOut } from 'lucide-react';
+import { toast } from '../utils/toast';
 
 interface ProfileProps {
   currentUser: User | null;
@@ -28,15 +29,15 @@ export default function Profile({
   const handleUpdatePassword = (e: React.FormEvent) => {
     e.preventDefault();
     if (currentPassword !== currentUser.password) {
-      alert(t('Current password incorrect!'));
+      toast.error(t('Current password incorrect!'));
       return;
     }
     if (newPassword !== confirmPassword) {
-      alert(t('Passwords do not match!'));
+      toast.error(t('Passwords do not match!'));
       return;
     }
     if (newPassword.length < 4) {
-      alert(t('Password must be at least 4 characters long'));
+      toast.error(t('Password must be at least 4 characters long'));
       return;
     }
 
@@ -49,7 +50,7 @@ export default function Profile({
     localStorage.setItem('tradecore_user', JSON.stringify(updatedUser));
 
     logAction('Changed Password', `User ${currentUser.username} updated account password.`);
-    alert(t('Password updated successfully!'));
+    toast.success(t('Password updated successfully!'));
 
     // Reset fields
     setCurrentPassword('');
