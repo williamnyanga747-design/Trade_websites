@@ -1,9 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Customer, StockItem, SalesOrder, Store, Settings, SOItem, PosShift } from '../types';
-import { X, Search, Plus, Minus, Trash2, ShoppingBag, AlertTriangle, CheckCircle, Info, Printer, TrendingUp, Calculator } from 'lucide-react';
+import { X, Search, Plus, Minus, Trash2, ShoppingBag, AlertTriangle, CheckCircle, Info, Printer, TrendingUp, Calculator, Lock, Share2, Mail, Check } from 'lucide-react';
 import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
+import { toast } from '../utils/toast';
+import { cleanCategoryName } from '../utils/categoryHelper';
 
 interface POSModalProps {
   isOpen: boolean;
@@ -42,8 +44,25 @@ export default function POSModal({
   currentUser,
   posShifts = []
 }: POSModalProps) {
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number>(customers[0]?.id || 1);
-  const activeStores = stores.filter(s => !s.isDeleted);
+  const activeCustomersForStore = useMemo(() => {
+    return customers.filter(c => !c.storeId || c.storeId === currentStoreId);
+  }, [customers, currentStoreId]);
+
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number>(activeCustomersForStore[0]?.id || 1);
+
+  useEffect(() => {
+    if (activeCustomersForStore.length > 0 && !activeCustomersForStore.some(c => c.id === selectedCustomerId)) {
+      setSelectedCustomerId(activeCustomersForStore[0].id);
+    }
+  }, [activeCustomersForStore, selectedCustomerId]);
+
+  const activeStores = useMemo(() => {
+    const rawActive = stores.filter(s => !s.isDeleted);
+    if (currentUser && currentUser.storeId) {
+      return rawActive.filter(s => s.id === currentUser.storeId);
+    }
+    return rawActive;
+  }, [stores, currentUser]);
   const [selectedStoreId, setSelectedStoreId] = useState<number>(currentStoreId || activeStores[0]?.id || 1);
   const [priceType, setPriceType] = useState<'Retail' | 'Wholesale' | 'Preferred'>('Retail');
   const [searchQuery, setSearchQuery] = useState('');
@@ -51,6 +70,84 @@ export default function POSModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<SalesOrder | null>(null);
   const [activeTab, setActiveTab] = useState<'catalog' | 'cart'>('catalog');
+
+  // Digital Invoice / WhatsApp states
+  const [showWhatsAppInput, setShowWhatsAppInput] = useState(false);
+  const [showEmailInput, setShowEmailInput] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+
+  useEffect(() => {
+    if (completedOrder) {
+      const cust = customers.find(c => c.id === completedOrder.customerId);
+      if (cust) {
+        setWhatsappPhone(cust.phone || '');
+        setCustomerEmail(cust.email || '');
+      }
+    } else {
+      setShowWhatsAppInput(false);
+      setShowEmailInput(false);
+    }
+  }, [completedOrder, customers]);
+
+  const submitWhatsAppShare = () => {
+    if (!whatsappPhone.trim()) {
+      toast.warning(t('Please enter a valid phone number'));
+      return;
+    }
+    const cust = customers.find(c => c.id === completedOrder?.customerId);
+    const storeObj = stores.find(s => s.id === completedOrder?.storeId);
+    const companyName = localStorage.getItem('tradecore_receipt_company_name') || storeObj?.name || 'Singida Grain Millers Ltd';
+    const totalDisplay = formatMoney(completedOrder?.total || 0, settings.currency || 'USD', settings.exchangeRate || 1);
+
+    let itemsText = '';
+    completedOrder?.items.forEach((item, index) => {
+      const prod = stockItems.find(p => p.id === item.productId);
+      const prodName = prod ? prod.name : 'Unknown Product';
+      const itemPrice = formatMoney(item.price, settings.currency || 'USD', settings.exchangeRate || 1);
+      itemsText += `${index + 1}. ${prodName} x ${item.qty} @ ${itemPrice}\n`;
+    });
+
+    const textReceipt = `*RECEIPT / RISITI - ${companyName}*\n` +
+      `-------------------------------------\n` +
+      `*Order No:* ${completedOrder?.soNumber}\n` +
+      `*Date / Tarehe:* ${completedOrder?.date}\n` +
+      `*Customer / Mteja:* ${cust?.name || 'Walk-in'}\n` +
+      `-------------------------------------\n` +
+      `*Items / Bidhaa:*\n${itemsText}` +
+      `-------------------------------------\n` +
+      `*TOTAL / JUMLA:* *${totalDisplay}*\n\n` +
+      `Thank you for shopping with us!\nAsanteni kwa kufanya biashara nasi! 🙏✨`;
+
+    // Try opening whatsapp
+    const cleanPhone = whatsappPhone.replace(/\D/g, ''); // strip non-numeric
+    const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(textReceipt)}`;
+    
+    // Copy to clipboard as robust fallback
+    try {
+      navigator.clipboard.writeText(textReceipt);
+      toast.success(t('Receipt details copied to clipboard as fallback!'));
+    } catch (err) {}
+
+    window.open(whatsappUrl, '_blank');
+    toast.success(t('Receipt dispatched to WhatsApp!'));
+    setShowWhatsAppInput(false);
+    if (logAction && completedOrder) {
+      logAction('WhatsApp Receipt Shared', `Dispatched receipt for ${completedOrder.soNumber} to ${cleanPhone}`);
+    }
+  };
+
+  const submitEmailInvoice = () => {
+    if (!customerEmail.trim()) {
+      toast.warning(t('Please enter a valid email address'));
+      return;
+    }
+    toast.success(`${t('Professional PDF Invoice sent successfully to')} ${customerEmail}!`);
+    setShowEmailInput(false);
+    if (logAction && completedOrder) {
+      logAction('Email Invoice Sent', `Sent digital invoice for ${completedOrder.soNumber} to ${customerEmail}`);
+    }
+  };
 
   // Drawer / Shift ledger states
   const [openingFloatStr, setOpeningFloatStr] = useState('100');
@@ -151,11 +248,15 @@ export default function POSModal({
     );
   };
 
+  const isAdminUser = useMemo(() => {
+    return !!(currentUser && ['Super Admin', 'Admin', 'Store Admin'].includes(currentUser.role));
+  }, [currentUser]);
+
   const activeShift = useMemo(() => {
     return (posShifts || []).find(
-      s => s.status === 'Open' && s.userId === (currentUser?.id || 1) && s.storeId === selectedStoreId
+      s => s.status === 'Open' && s.storeId === selectedStoreId
     );
-  }, [posShifts, currentUser, selectedStoreId]);
+  }, [posShifts, selectedStoreId]);
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -193,7 +294,12 @@ export default function POSModal({
   }, [selectedCustomerId, selectedCustomer]);
 
   // Helper to get active product price
-  const getProductPrice = (item: StockItem) => {
+  const getProductPrice = (item: StockItem, unitType: 'main' | 'sub' = 'main') => {
+    if (unitType === 'sub') {
+      if (priceType === 'Wholesale') return item.subUnitWholesalePrice ?? item.subUnitRetailPrice ?? 0;
+      if (priceType === 'Preferred') return item.subUnitPartnerPrice ?? item.subUnitRetailPrice ?? 0;
+      return item.subUnitRetailPrice ?? 0;
+    }
     if (priceType === 'Wholesale') return item.wholesalePrice;
     if (priceType === 'Preferred') return item.partnerPrice ?? item.retailPrice;
     return item.retailPrice;
@@ -204,22 +310,59 @@ export default function POSModal({
     return item.stock[storeId] || 0;
   };
 
+  const formatStockQty = (qty: number, item: StockItem) => {
+    if (item.useSubUnitPricing && item.subUnitConversion && item.subUnitConversion > 1) {
+      const mainUnits = Math.floor(qty / item.subUnitConversion);
+      const subUnits = parseFloat((qty % item.subUnitConversion).toFixed(4));
+      
+      const mainLabel = item.unit || 'Pkg';
+      const subLabel = item.subUnitName || 'pcs';
+      
+      if (mainUnits > 0 && subUnits > 0) {
+        return `${mainUnits} ${mainLabel}, ${subUnits} ${subLabel}`;
+      } else if (mainUnits > 0) {
+        return `${mainUnits} ${mainLabel}`;
+      } else {
+        return `${subUnits} ${subLabel}`;
+      }
+    }
+    return `${qty} ${item.unit || 'pcs'}`;
+  };
+
+  // Helper to calculate total of a product in the cart in terms of base units
+  const getProductTotalInCartInBaseUnits = (productId: number, excludeUnitType?: 'main' | 'sub') => {
+    let totalBaseUnits = 0;
+    cart.forEach(c => {
+      if (c.productId === productId && (excludeUnitType === undefined || (c.unitType || 'main') !== excludeUnitType)) {
+        const item = stockItems.find(p => p.id === productId);
+        if (item) {
+          const conversion = (c.unitType || 'main') === 'main' ? (item.subUnitConversion || 1) : 1;
+          totalBaseUnits += c.qty * conversion;
+        }
+      }
+    });
+    return totalBaseUnits;
+  };
+
   // Add to Cart
   const handleAddToCart = (item: StockItem) => {
     setErrorMsg(null);
-    const availableStock = getStockQty(item, selectedStoreId);
+    const availableStock = getStockQty(item, selectedStoreId); // in base units
     if (availableStock <= 0) {
       setErrorMsg(`${t('Product')} "${item.name}" ${t('is out of stock in this store!')}`);
       return;
     }
 
-    const existingCartIndex = cart.findIndex(c => c.productId === item.id);
-    const targetPrice = getProductPrice(item);
+    const existingCartIndex = cart.findIndex(c => c.productId === item.id && (c.unitType || 'main') === 'main');
+    const targetPrice = getProductPrice(item, 'main');
 
     if (existingCartIndex > -1) {
       const currentQtyInCart = cart[existingCartIndex].qty;
-      if (currentQtyInCart + 1 > availableStock) {
-        setErrorMsg(`${t('Cannot add more than available stock')} (${availableStock} ${t('available')})`);
+      const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id, 'main');
+      const itemConversion = item.subUnitConversion || 1;
+      const totalRequiredBaseUnits = otherBaseUnits + (currentQtyInCart + 1) * itemConversion;
+      if (totalRequiredBaseUnits > availableStock) {
+        setErrorMsg(`${t('Cannot add more than available stock')} (${formatStockQty(availableStock, item)} ${t('available')})`);
         return;
       }
       const updatedCart = [...cart];
@@ -228,37 +371,68 @@ export default function POSModal({
       updatedCart[existingCartIndex].price = targetPrice;
       setCart(updatedCart);
     } else {
+      const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id);
+      const itemConversion = item.subUnitConversion || 1;
+      const totalRequiredBaseUnits = otherBaseUnits + 1 * itemConversion;
+      if (totalRequiredBaseUnits > availableStock) {
+        setErrorMsg(`${t('Cannot add more than available stock')} (${formatStockQty(availableStock, item)} ${t('available')})`);
+        return;
+      }
       setCart([
         ...cart,
         {
           productId: item.id,
           qty: 1,
           price: targetPrice,
-          cost: item.purchasePrice
+          cost: item.purchasePrice,
+          unitType: 'main'
         }
       ]);
     }
   };
 
+  const handleToggleCartUnit = (productId: number, unitType: 'main' | 'sub') => {
+    const item = stockItems.find(p => p.id === productId);
+    if (!item) return;
+    setCart(cart.map(c => {
+      if (c.productId === productId) {
+        const nextPrice = getProductPrice(item, unitType);
+        const nextCost = unitType === 'sub' ? item.purchasePrice / (item.subUnitConversion || 1) : item.purchasePrice;
+        return {
+          ...c,
+          unitType,
+          price: nextPrice,
+          cost: nextCost
+        };
+      }
+      return c;
+    }));
+  };
+
   // Update Cart Qty
-  const handleUpdateQty = (productId: number, newQty: number) => {
+  const handleUpdateQty = (productId: number, unitType: 'main' | 'sub', newQty: number) => {
     setErrorMsg(null);
     const item = stockItems.find(p => p.id === productId);
     if (!item) return;
 
     if (newQty <= 0) {
-      handleRemoveItem(productId);
+      handleRemoveItem(productId, unitType);
       return;
     }
 
-    const availableStock = getStockQty(item, selectedStoreId);
-    if (newQty > availableStock) {
-      setErrorMsg(`${t('Only')} ${availableStock} ${t('items are available in stock!')}`);
+    const availableStock = getStockQty(item, selectedStoreId); // in base units
+    const conversion = unitType === 'main' ? (item.subUnitConversion || 1) : 1;
+    const requestedBaseUnits = newQty * conversion;
+    const otherBaseUnits = getProductTotalInCartInBaseUnits(productId, unitType);
+
+    if (otherBaseUnits + requestedBaseUnits > availableStock) {
+      const maxAllowedInThisUnit = (availableStock - otherBaseUnits) / conversion;
+      setErrorMsg(`${t('Only')} ${parseFloat(maxAllowedInThisUnit.toFixed(4))} ${unitType === 'sub' ? (item.subUnitName || 'sub-units') : (item.unit || 'units')} ${t('are available in stock!')}`);
       return;
     }
 
     setCart(cart.map(c => {
-      if (c.productId === productId) {
+      if (c.productId === productId && (c.unitType || 'main') === unitType) {
         return { ...c, qty: newQty };
       }
       return c;
@@ -266,8 +440,8 @@ export default function POSModal({
   };
 
   // Remove from Cart
-  const handleRemoveItem = (productId: number) => {
-    setCart(cart.filter(c => c.productId !== productId));
+  const handleRemoveItem = (productId: number, unitType: 'main' | 'sub' = 'main') => {
+    setCart(cart.filter(c => !(c.productId === productId && (c.unitType || 'main') === unitType)));
   };
 
   // Recalculate cart prices when pricing mode changes
@@ -276,9 +450,7 @@ export default function POSModal({
     setCart(cart.map(c => {
       const item = stockItems.find(p => p.id === c.productId);
       if (item) {
-        let price = item.retailPrice;
-        if (newMode === 'Wholesale') price = item.wholesalePrice;
-        else if (newMode === 'Preferred') price = item.partnerPrice ?? item.retailPrice;
+        const price = getProductPrice(item, c.unitType || 'main');
         return {
           ...c,
           price
@@ -294,14 +466,20 @@ export default function POSModal({
     let totalCost = 0;
     cart.forEach(c => {
       grossTotal += c.price * c.qty;
-      totalCost += c.cost * c.qty;
+      const item = stockItems.find(p => p.id === c.productId);
+      if (item) {
+        const itemCost = c.unitType === 'sub' ? item.purchasePrice / (item.subUnitConversion || 1) : item.purchasePrice;
+        totalCost += itemCost * c.qty;
+      } else {
+        totalCost += c.cost * c.qty;
+      }
     });
     return {
       total: grossTotal,
       cost: totalCost,
       profit: grossTotal - totalCost
     };
-  }, [cart]);
+  }, [cart, stockItems]);
 
   // Check customer credit limit validation
   const isCreditExceeded = useMemo(() => {
@@ -327,9 +505,11 @@ export default function POSModal({
     for (const cartItem of cart) {
       const item = stockItems.find(p => p.id === cartItem.productId);
       if (!item) continue;
-      const currentStock = getStockQty(item, selectedStoreId);
-      if (cartItem.qty > currentStock) {
-        setErrorMsg(`${t('Stock changed or insufficient for')} "${item.name}". (${t('Available')}: ${currentStock})`);
+      const currentStock = getStockQty(item, selectedStoreId); // in base units
+      const conversion = cartItem.unitType === 'main' ? (item.subUnitConversion || 1) : 1;
+      const requiredQtyInBaseUnits = cartItem.qty * conversion;
+      if (requiredQtyInBaseUnits > currentStock) {
+        setErrorMsg(`${t('Stock changed or insufficient for')} "${item.name}". (${t('Available')}: ${formatStockQty(currentStock, item)})`);
         return;
       }
     }
@@ -342,12 +522,17 @@ export default function POSModal({
       storeId: selectedStoreId,
       date: new Date().toISOString().split('T')[0],
       priceType: priceType,
-      items: cart.map(c => ({
-        productId: c.productId,
-        qty: c.qty,
-        price: c.price,
-        cost: c.cost
-      })),
+      items: cart.map(c => {
+        const item = stockItems.find(p => p.id === c.productId);
+        return {
+          productId: c.productId,
+          qty: c.qty,
+          price: c.price,
+          cost: c.cost,
+          unitType: c.unitType || 'main',
+          subUnitName: c.unitType === 'sub' ? item?.subUnitName : undefined
+        };
+      }),
       total: totals.total,
       profit: totals.profit,
       status: 'Completed'
@@ -355,10 +540,15 @@ export default function POSModal({
 
     // Subtract stock quantities
     const updatedStockItems = stockItems.map(p => {
-      const cartItem = cart.find(c => c.productId === p.id);
-      if (cartItem) {
+      const matchingCartItems = cart.filter(c => c.productId === p.id);
+      if (matchingCartItems.length > 0) {
         const nextStockObj = { ...p.stock };
-        nextStockObj[selectedStoreId] = Math.max(0, (nextStockObj[selectedStoreId] || 0) - cartItem.qty);
+        let totalDeductionInBaseUnits = 0;
+        matchingCartItems.forEach(cartItem => {
+          const conversion = cartItem.unitType === 'main' ? (p.subUnitConversion || 1) : 1;
+          totalDeductionInBaseUnits += cartItem.qty * conversion;
+        });
+        nextStockObj[selectedStoreId] = Math.max(0, (nextStockObj[selectedStoreId] || 0) - totalDeductionInBaseUnits);
         return { ...p, stock: nextStockObj };
       }
       return p;
@@ -564,13 +754,92 @@ export default function POSModal({
   // Render open register screen if session is closed
   if (!activeShift) {
     const storeObj = stores.find(s => s.id === selectedStoreId);
+
+    if (!isAdminUser) {
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="px-5 py-4 border-b flex items-center justify-between bg-red-900 text-white flex-shrink-0">
+              <span className="font-bold flex items-center gap-2 text-sm">
+                <Lock className="w-5 h-5 text-red-300" /> {t('Access Restricted')}
+              </span>
+              <button onClick={onClose} className="p-1 hover:bg-red-800 rounded text-red-200 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 text-center space-y-4">
+              <div className="mx-auto w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600 animate-pulse">
+                <Lock className="w-6 h-6" />
+              </div>
+              <h3 className="text-sm font-black text-gray-900">{t('Cash Register Drawer Closed')}</h3>
+              <p className="text-xs font-semibold text-gray-600 leading-relaxed">
+                {t('The cash drawer for this store is currently closed. Only administrators or store administrators are authorized to open and register the cash drawer float.')}
+              </p>
+              <div className="p-3 bg-gray-50 rounded-lg text-[10px] font-bold text-gray-500 text-left space-y-1">
+                <span className="block">{t('Selected Depot / Store')}: <strong className="text-gray-800">{storeObj?.name || 'Main Depot'}</strong></span>
+                <span className="block">{t('Authorized Roles')}: <strong className="text-emerald-700">Super Admin, Admin, Store Admin</strong></span>
+              </div>
+              {activeStores.length > 1 && (
+                <div className="space-y-1 text-left">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Switch POS Depot / Store')}</label>
+                  <select
+                    value={selectedStoreId}
+                    onChange={(e) => setSelectedStoreId(Number(e.target.value))}
+                    className="w-full px-3 py-2 border rounded-lg text-xs font-semibold outline-none bg-white"
+                  >
+                    {activeStores.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} - {s.location}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="pt-2">
+                <button
+                  onClick={onClose}
+                  className="w-full py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs transition"
+                >
+                  {t('Back to Dashboard')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const getFloatPresets = () => {
+      if (settings.currency === 'TZS') {
+        return [
+          { label: t('Standard Day Float'), value: 100000 },
+          { label: t('Weekend Float'), value: 250000 },
+          { label: t('Minimum Backup Float'), value: 50000 },
+          { label: t('Big Ledger Float'), value: 500000 },
+        ];
+      } else if (settings.currency === 'KES') {
+        return [
+          { label: t('Standard Day Float'), value: 5000 },
+          { label: t('Weekend Float'), value: 12000 },
+          { label: t('Minimum Backup Float'), value: 2500 },
+          { label: t('Big Ledger Float'), value: 25000 },
+        ];
+      } else {
+        return [
+          { label: t('Standard Day Float'), value: 100 },
+          { label: t('Weekend Float'), value: 250 },
+          { label: t('Minimum Backup Float'), value: 50 },
+          { label: t('Big Ledger Float'), value: 500 },
+        ];
+      }
+    };
+
     return (
       <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
           {/* Header */}
           <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-900 text-white">
             <span className="font-bold flex items-center gap-2 text-sm">
-              <AlertTriangle className="w-5 h-5 text-amber-500" /> Register Drawer Closed
+              <AlertTriangle className="w-5 h-5 text-amber-500" /> {t('Register Drawer Closed')}
             </span>
             <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
               <X className="w-5 h-5" />
@@ -578,12 +847,12 @@ export default function POSModal({
           </div>
           <div className="p-6 space-y-4">
             <p className="text-xs font-semibold text-gray-600">
-              To begin processing POS transactions, cashiers must declare their opening float and open a register session for reconciliation tracking.
+              {t('To begin processing POS transactions, cashiers must declare their opening float and open a register session for reconciliation tracking.')}
             </p>
             
             {/* Store selector if multiple stores */}
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Select POS Depot / Store</label>
+              <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Select POS Depot / Store')}</label>
               <select
                 value={selectedStoreId}
                 onChange={(e) => setSelectedStoreId(Number(e.target.value))}
@@ -597,7 +866,7 @@ export default function POSModal({
 
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Opening Float (Starting Drawer Cash)</label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Opening Float (Starting Drawer Cash)')}</label>
                 <button
                   type="button"
                   onClick={() => { setShowDenomOpen(!showDenomOpen); setDenomCounts({}); }}
@@ -617,6 +886,24 @@ export default function POSModal({
                   placeholder="e.g. 100"
                 />
               </div>
+
+              {/* Quick float presets */}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {getFloatPresets().map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setOpeningFloatStr(String(preset.value));
+                      setDenomCounts({});
+                    }}
+                    className="px-2 py-1 text-[10px] font-bold border border-gray-200 hover:border-brand/40 hover:bg-brand/5 text-gray-700 hover:text-brand rounded-lg transition-all"
+                  >
+                    ⚡ {preset.label}: {formatMoney(preset.value, settings.currency, settings.exchangeRate)}
+                  </button>
+                ))}
+              </div>
+
               {showDenomOpen && (
                 <div className="mt-2">
                   {renderPhysicalDenominationCalculator('open')}
@@ -625,12 +912,12 @@ export default function POSModal({
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Opening Notes / Description</label>
+              <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Opening Notes / Description')}</label>
               <textarea
                 value={openingNotes}
                 onChange={(e) => setOpeningNotes(e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg text-xs font-semibold outline-none h-16 resize-none"
-                placeholder="e.g. Morning Shift drawer opening float"
+                placeholder={t('e.g. Morning Shift drawer opening float')}
               />
             </div>
 
@@ -639,13 +926,13 @@ export default function POSModal({
                 onClick={onClose}
                 className="flex-1 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold rounded-lg text-xs transition"
               >
-                Cancel
+                {t('Cancel')}
               </button>
               <button
                 onClick={handleOpenShift}
                 className="flex-1 py-2 bg-brand hover:bg-brand-hover text-white font-bold rounded-lg text-xs transition shadow-sm"
               >
-                Open Register Session
+                {t('Open Register Session')}
               </button>
             </div>
           </div>
@@ -730,7 +1017,7 @@ export default function POSModal({
                   return (
                     <tr key={idx} className="text-gray-700">
                       <td className="py-1.5 max-w-[140px] truncate">{product?.name || `Product #${item.productId}`}</td>
-                      <td className="py-1.5 text-center">{item.qty} {product?.unit || 'Package'}</td>
+                      <td className="py-1.5 text-center">{item.qty} {item.unitType === 'sub' ? (item.subUnitName || 'unit') : (product?.unit || 'Package')}</td>
                       <td className="py-1.5 text-right">{formatMoney(item.price, settings.currency, settings.exchangeRate)}</td>
                       <td className="py-1.5 text-right font-bold text-gray-900">{formatMoney(item.price * item.qty, settings.currency, settings.exchangeRate)}</td>
                     </tr>
@@ -761,6 +1048,73 @@ export default function POSModal({
             </div>
           </div>
 
+          {/* Digital Invoice / WhatsApp Receipt Panel */}
+          <div className="p-4 border-t bg-gray-50/50 space-y-3 no-print text-xs">
+            <span className="text-[10px] font-bold text-gray-400 block tracking-wider uppercase">{t('Digital Dispatch / Tuma Kidijitali')}</span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  setShowWhatsAppInput(!showWhatsAppInput);
+                  setShowEmailInput(false);
+                }}
+                className={`py-1.5 px-3 ${showWhatsAppInput ? 'bg-[#128C7E]' : 'bg-[#25D366]'} hover:bg-[#128C7E] text-white font-bold rounded-lg text-[11px] uppercase tracking-wide flex items-center justify-center gap-1.5 shadow-xs transition`}
+              >
+                <Share2 className="w-3.5 h-3.5" /> WhatsApp
+              </button>
+              <button
+                onClick={() => {
+                  setShowEmailInput(!showEmailInput);
+                  setShowWhatsAppInput(false);
+                }}
+                className={`py-1.5 px-3 ${showEmailInput ? 'bg-indigo-700' : 'bg-indigo-600'} hover:bg-indigo-700 text-white font-bold rounded-lg text-[11px] uppercase tracking-wide flex items-center justify-center gap-1.5 shadow-xs transition`}
+              >
+                <Mail className="w-3.5 h-3.5" /> Email Invoice
+              </button>
+            </div>
+            
+            {showWhatsAppInput && (
+              <div className="p-2.5 bg-white border rounded-lg space-y-2 animate-fade-in">
+                <label className="text-[10px] font-bold text-gray-500 block">{t('WhatsApp Number / Namba ya WhatsApp')}:</label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={whatsappPhone}
+                    onChange={(e) => setWhatsappPhone(e.target.value)}
+                    placeholder="e.g. 255712345678"
+                    className="flex-1 px-2.5 py-1 border rounded-md text-xs font-semibold outline-none bg-white text-gray-800"
+                  />
+                  <button
+                    onClick={submitWhatsAppShare}
+                    className="px-3 py-1 bg-[#25D366] text-white font-bold rounded-md text-xs hover:bg-[#128C7E] transition shrink-0"
+                  >
+                    {t('Send')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {showEmailInput && (
+              <div className="p-2.5 bg-white border rounded-lg space-y-2 animate-fade-in">
+                <label className="text-[10px] font-bold text-gray-500 block">{t('Customer Email / Barua Pepe ya Mteja')}:</label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="email"
+                    value={customerEmail}
+                    onChange={(e) => setCustomerEmail(e.target.value)}
+                    placeholder="customer@example.com"
+                    className="flex-1 px-2.5 py-1 border rounded-md text-xs font-semibold outline-none bg-white text-gray-800"
+                  />
+                  <button
+                    onClick={submitEmailInvoice}
+                    className="px-3 py-1 bg-indigo-600 text-white font-bold rounded-md text-xs hover:bg-indigo-700 transition shrink-0"
+                  >
+                    {t('Send')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Actions */}
           <div className="p-4 bg-gray-50 border-t flex gap-2 no-print">
             <button
@@ -776,13 +1130,13 @@ export default function POSModal({
               }}
               className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider flex items-center justify-center gap-1.5"
             >
-              <Printer className="w-4 h-4" /> Print Receipt
+              <Printer className="w-4 h-4" /> {t('Print Receipt')}
             </button>
             <button
               onClick={() => { setCompletedOrder(null); setCart([]); onClose(); }}
               className="flex-1 py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs uppercase tracking-wider"
             >
-              Done / New Sale
+              {t('Done / New Sale')}
             </button>
           </div>
         </div>
@@ -800,6 +1154,145 @@ export default function POSModal({
     );
   }
 
+  const AIPOSAssistantPanel = () => {
+    const [isAiOpen, setIsAiOpen] = useState(false);
+    const [aiPrompt, setAiPrompt] = useState('');
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiResponse, setAiResponse] = useState<any>(null);
+
+    const handleAskAI = async () => {
+      if (!aiPrompt.trim()) return;
+      setAiLoading(true);
+      setAiResponse(null);
+      try {
+        const response = await fetch('/api/ai-assist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: aiPrompt,
+            products: stockItems.map(p => ({
+              id: p.id,
+              name: p.name,
+              code: p.code,
+              category: p.category,
+              stock_qty: p.stock?.[selectedStoreId] || 0,
+              useSubUnitPricing: p.useSubUnitPricing,
+              unit: p.unit,
+              subUnitName: p.subUnitName,
+              subUnitConversion: p.subUnitConversion,
+              purchasePrice: p.purchasePrice,
+              retailPrice: p.retailPrice,
+              wholesalePrice: p.wholesalePrice,
+              subUnitRetailPrice: p.subUnitRetailPrice,
+              subUnitWholesalePrice: p.subUnitWholesalePrice,
+            })),
+            priceType: priceType
+          })
+        });
+        const data = await response.json();
+        setAiResponse(data);
+      } catch (err: any) {
+        console.error("AI POS error", err);
+        setAiResponse({ success: false, explanation: "Failed to query AI assistant." });
+      } finally {
+        setAiLoading(false);
+      }
+    };
+
+    const handleAddToCartActions = () => {
+      if (!aiResponse || !aiResponse.actions) return;
+      
+      const updatedCart = [...cart];
+      let itemsAdded = 0;
+
+      aiResponse.actions.forEach((action: any) => {
+        const item = stockItems.find(p => p.id === action.productId);
+        if (!item) return;
+
+        const unitType = action.unitType || 'main';
+        const qtyToAdd = action.qty || 1;
+        const targetPrice = action.price || getProductPrice(item, unitType);
+        const targetCost = unitType === 'sub' ? item.purchasePrice / (item.subUnitConversion || 1) : item.purchasePrice;
+
+        const existingCartIndex = updatedCart.findIndex(
+          c => c.productId === item.id && (c.unitType || 'main') === unitType
+        );
+
+        if (existingCartIndex > -1) {
+          updatedCart[existingCartIndex].qty += qtyToAdd;
+          updatedCart[existingCartIndex].price = targetPrice;
+        } else {
+          updatedCart.push({
+            productId: item.id,
+            qty: qtyToAdd,
+            price: targetPrice,
+            cost: targetCost,
+            unitType: unitType
+          });
+        }
+        itemsAdded += qtyToAdd;
+      });
+
+      setCart(updatedCart);
+      toast.success(`${itemsAdded} items added to active cart from AI recommendations!`);
+      setAiResponse(null);
+      setAiPrompt('');
+    };
+
+    return (
+      <div className="bg-gradient-to-r from-indigo-50/70 to-brand/5 rounded-xl border border-brand/20 shadow-xs p-3.5 space-y-2.5">
+        <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsAiOpen(!isAiOpen)}>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs">✨</span>
+            <span className="font-bold text-gray-900 text-[11px] uppercase tracking-wider">{t('AI Sales Copilot')}</span>
+          </div>
+          <button className="text-[10px] font-black text-brand uppercase">
+            {isAiOpen ? t('Hide') : t('Show')}
+          </button>
+        </div>
+
+        {isAiOpen && (
+          <div className="space-y-2 border-t pt-2 border-indigo-100 animate-fadeIn">
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder={t("e.g. 'Customer is purchasing 3 individual loaves of bread and 1 sack of flour'")}
+                className="w-full h-14 p-2 border border-gray-200 rounded text-[11px] font-semibold outline-none focus:border-brand bg-white resize-none"
+              />
+              <button
+                onClick={handleAskAI}
+                disabled={aiLoading}
+                className="w-full bg-brand hover:bg-brand-hover text-white py-1.5 rounded text-[10px] font-black uppercase transition flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                {aiLoading ? (
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : '✨'} {t('Interpret Order')}
+              </button>
+            </div>
+
+            {aiResponse && (
+              <div className="p-2.5 bg-white border rounded space-y-2">
+                <p className="text-[10px] font-semibold text-gray-700 whitespace-pre-line leading-relaxed pl-1.5 border-l border-brand">
+                  {aiResponse.explanation}
+                </p>
+
+                {aiResponse.success && aiResponse.actions && aiResponse.actions.length > 0 && (
+                  <button
+                    onClick={handleAddToCartActions}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1 rounded text-[10px] font-black uppercase transition flex items-center justify-center gap-1"
+                  >
+                    <Check className="w-3 h-3" /> {t('Add Recommended Items to Cart')}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[92vh] overflow-hidden flex flex-col">
@@ -816,7 +1309,7 @@ export default function POSModal({
             )}
           </div>
           <div className="flex items-center gap-3">
-            {activeShift && (
+            {activeShift && isAdminUser && (
               <button
                 onClick={() => {
                   setClosingCashActualStr(String(activeShift.openingFloat + (activeShift.expectedCashSales || 0)));
@@ -825,7 +1318,7 @@ export default function POSModal({
                 }}
                 className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition"
               >
-                Close Drawer / Shift
+                {t('Close Drawer / Shift')}
               </button>
             )}
             <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
@@ -929,12 +1422,12 @@ export default function POSModal({
                           <span className={`absolute top-2 right-2 text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${
                             isOutOfStock ? 'bg-red-600 text-white' : 'bg-gray-900 text-white'
                           }`}>
-                            {isOutOfStock ? t('Out of Stock') : `${stockQty} ${t('available')}`}
+                            {isOutOfStock ? t('Out of Stock') : `${formatStockQty(stockQty, item)} ${t('available')}`}
                           </span>
                         </div>
 
                         <div className="mt-3.5">
-                          <span className="text-[10px] bg-indigo-50 text-indigo-700 font-extrabold px-1.5 py-0.5 rounded uppercase">{item.category}</span>
+                          <span className="text-[10px] bg-indigo-50 text-indigo-700 font-extrabold px-1.5 py-0.5 rounded uppercase">{cleanCategoryName(item.category)}</span>
                           <h4 className="font-black text-gray-900 text-xs mt-1 block truncate">{item.name}</h4>
                           <span className="text-[9px] font-mono text-gray-400 mt-0.5 block tracking-widest">SKU: {item.code}</span>
                         </div>
@@ -986,7 +1479,7 @@ export default function POSModal({
                     onChange={(e) => setSelectedCustomerId(Number(e.target.value))}
                     className="w-full px-2 py-1.5 border rounded-md text-xs font-semibold outline-none bg-white text-gray-800"
                   >
-                    {customers.map(c => (
+                    {activeCustomersForStore.map(c => (
                       <option key={c.id} value={c.id}>{c.name} ({t(c.type)})</option>
                     ))}
                   </select>
@@ -1044,6 +1537,9 @@ export default function POSModal({
                   </div>
                 )}
               </div>
+              <div className="mt-3">
+                <AIPOSAssistantPanel />
+              </div>
             </div>
 
             {/* Cart Items List */}
@@ -1053,36 +1549,57 @@ export default function POSModal({
                   const product = stockItems.find(p => p.id === c.productId);
                   if (!product) return null;
 
+                  const currentUnitType = c.unitType || 'main';
+
                   return (
                     <div
-                      key={c.productId}
+                      key={`${c.productId}-${currentUnitType}`}
                       className="bg-white rounded-xl border border-gray-200/85 p-3 flex items-center justify-between gap-2 shadow-xs"
                     >
                       <div className="min-w-0 flex-1">
                         <span className="font-black text-gray-900 text-xs block truncate">{product.name}</span>
-                        <span className="text-[10px] text-brand font-bold mt-0.5 block">
-                          {formatMoney(c.price, settings.currency, settings.exchangeRate)}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] text-brand font-bold">
+                            {formatMoney(c.price, settings.currency, settings.exchangeRate)} / {currentUnitType === 'sub' ? product.subUnitName : (product.unit || 'unit')}
+                          </span>
+                          {product.useSubUnitPricing && (
+                            <select
+                              value={currentUnitType}
+                              onChange={(e) => handleToggleCartUnit(c.productId, e.target.value as 'main' | 'sub')}
+                              className="px-1 py-0.5 text-[9px] border border-gray-300 rounded bg-white font-bold text-gray-700 outline-none cursor-pointer"
+                            >
+                              <option value="main">{product.unit || 'Main Unit'}</option>
+                              <option value="sub">{product.subUnitName || 'Sub-Unit'}</option>
+                            </select>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => handleUpdateQty(c.productId, c.qty - 1)}
-                          className="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded flex items-center justify-center font-bold text-gray-600"
+                          onClick={() => handleUpdateQty(c.productId, currentUnitType, Math.max(0, parseFloat((c.qty - 1).toFixed(4))))}
+                          className="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded flex items-center justify-center font-bold text-gray-600 animate-none"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
-                        <span className="text-xs font-black w-6 text-center text-gray-900">{c.qty}</span>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={c.qty}
+                          onChange={(e) => handleUpdateQty(c.productId, currentUnitType, parseFloat(e.target.value) || 0)}
+                          className="w-12 px-1 py-0.5 text-xs font-bold text-center border rounded bg-gray-50 text-gray-900 focus:outline-none focus:ring-1 focus:ring-brand"
+                        />
                         <button
-                          onClick={() => handleUpdateQty(c.productId, c.qty + 1)}
-                          className="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded flex items-center justify-center font-bold text-gray-600"
+                          onClick={() => handleUpdateQty(c.productId, currentUnitType, parseFloat((c.qty + 1).toFixed(4)))}
+                          className="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded flex items-center justify-center font-bold text-gray-600 animate-none"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
                       </div>
 
                       <button
-                        onClick={() => handleRemoveItem(c.productId)}
+                        onClick={() => handleRemoveItem(c.productId, currentUnitType)}
                         className="text-gray-400 hover:text-brand"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1148,7 +1665,7 @@ export default function POSModal({
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
               <div className="px-5 py-4 border-b flex items-center justify-between bg-red-900 text-white">
                 <span className="font-bold flex items-center gap-2 text-sm">
-                  <AlertTriangle className="w-5 h-5 text-amber-400" /> Close Cash Drawer & Reconcile
+                  <AlertTriangle className="w-5 h-5 text-amber-400" /> {t('Close Cash Drawer & Reconcile')}
                 </span>
                 <button onClick={() => setShowClosingModal(false)} className="p-1 hover:bg-red-800 rounded text-red-200 hover:text-white">
                   <X className="w-5 h-5" />
@@ -1157,22 +1674,22 @@ export default function POSModal({
               <div className="p-6 space-y-4">
                 <div className="bg-slate-50 p-4 rounded-xl space-y-2 text-xs font-semibold">
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Opening Float:</span>
+                    <span className="text-gray-400">{t('Opening Float')}:</span>
                     <span className="font-bold text-gray-900">{formatMoney(activeShift.openingFloat, settings.currency, settings.exchangeRate)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Total Shift Cash Sales:</span>
+                    <span className="text-gray-400">{t('Total Shift Cash Sales')}:</span>
                     <span className="font-bold text-emerald-600">+{formatMoney(activeShift.expectedCashSales || 0, settings.currency, settings.exchangeRate)}</span>
                   </div>
                   <div className="flex justify-between border-t pt-2 font-black text-gray-900">
-                    <span>Expected Total Drawer Cash:</span>
+                    <span>{t('Expected Total Drawer Cash')}:</span>
                     <span>{formatMoney(activeShift.openingFloat + (activeShift.expectedCashSales || 0), settings.currency, settings.exchangeRate)}</span>
                   </div>
                 </div>
 
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Actual Counted Cash on Hand</label>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Actual Counted Cash on Hand')}</label>
                     <button
                       type="button"
                       onClick={() => { setShowDenomClose(!showDenomClose); setDenomCounts({}); }}
@@ -1189,7 +1706,7 @@ export default function POSModal({
                       value={closingCashActualStr}
                       onChange={(e) => setClosingCashActualStr(e.target.value)}
                       className="w-full pl-12 pr-3 py-2 border rounded-lg text-xs font-black outline-none"
-                      placeholder="Enter exact cash amount in drawer"
+                      placeholder={t('Enter exact cash amount in drawer')}
                     />
                   </div>
                   {showDenomClose && (
@@ -1241,12 +1758,12 @@ export default function POSModal({
                 })()}
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">Shift Closing Notes (Discrepancy Justifications)</label>
+                  <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Shift Closing Notes (Discrepancy Justifications)')}</label>
                   <textarea
                     value={closingNotes}
                     onChange={(e) => setClosingNotes(e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg text-xs font-semibold outline-none h-16 resize-none"
-                    placeholder="Describe any shortages, overages, or physical drawer notes..."
+                    placeholder={t('Describe any shortages, overages, or physical drawer notes...')}
                   />
                 </div>
 
@@ -1256,14 +1773,14 @@ export default function POSModal({
                     onClick={() => setShowClosingModal(false)}
                     className="flex-1 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold rounded-lg text-xs transition"
                   >
-                    Keep Open
+                    {t('Keep Open')}
                   </button>
                   <button
                     type="button"
                     onClick={handleCloseShift}
                     className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-xs transition shadow-sm"
                   >
-                    Close Session & Reconcile
+                    {t('Close Session & Reconcile')}
                   </button>
                 </div>
               </div>

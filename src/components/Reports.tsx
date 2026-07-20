@@ -3,7 +3,7 @@ import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expens
 import { formatMoney } from '../utils/format';
 import { toast } from '../utils/toast';
 import {
-  FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar
+  FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar, ShieldAlert
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
@@ -58,6 +58,11 @@ export default function Reports({
   const [selectedShiftUserId, setSelectedShiftUserId] = useState<string>('all');
   const [selectedShiftStatus, setSelectedShiftStatus] = useState<string>('all');
   const [expandedShiftId, setExpandedShiftId] = useState<number | null>(null);
+
+  // Velocity report states
+  const [velocityStoreId, setVelocityStoreId] = useState<string>('all');
+  const [velocityCategory, setVelocityCategory] = useState<string>('all');
+  const [velocitySearch, setVelocitySearch] = useState<string>('');
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -944,11 +949,407 @@ export default function Reports({
     );
   };
 
-  // Determine active table ID for CSV export
+  const renderReportUnitVelocity = () => {
+    // 1. Calculate analyzed duration
+    const startMs = new Date(txStartDate).getTime();
+    const endMs = new Date(txEndDate).getTime();
+    const msDiff = endMs - startMs;
+    const daysCount = Math.max(1, Math.ceil(msDiff / (1000 * 60 * 60 * 24)) + 1);
+
+    // 2. Filter orders
+    const filteredOrders = salesOrders.filter(o => {
+      if (o.status === 'Voided') return false;
+      const orderDate = o.date; // YYYY-MM-DD
+      const dateInRange = orderDate >= txStartDate && orderDate <= txEndDate;
+      const storeMatch = velocityStoreId === 'all' || o.storeId === Number(velocityStoreId);
+      return dateInRange && storeMatch;
+    });
+
+    // 3. Aggregate sales by product
+    const velocityMap: Record<number, {
+      bulkCount: number;      // Packages sold
+      subCount: number;       // Loose units sold
+      bulkBaseUnits: number;  // Base units sold as package
+      subBaseUnits: number;   // Base units sold loose
+      bulkRevenue: number;
+      subRevenue: number;
+    }> = {};
+
+    filteredOrders.forEach(o => {
+      o.items.forEach(item => {
+        const pId = item.productId;
+        const p = stockItems.find(x => x.id === pId);
+        if (!p) return;
+
+        if (!velocityMap[pId]) {
+          velocityMap[pId] = {
+            bulkCount: 0,
+            subCount: 0,
+            bulkBaseUnits: 0,
+            subBaseUnits: 0,
+            bulkRevenue: 0,
+            subRevenue: 0
+          };
+        }
+
+        const stats = velocityMap[pId];
+        const qty = item.qty || 0;
+        const conversion = p.subUnitConversion || 1;
+        const isLoose = item.unitType === 'sub';
+
+        if (isLoose) {
+          stats.subCount += qty;
+          stats.subBaseUnits += qty;
+          stats.subRevenue += qty * (item.price || 0);
+        } else {
+          stats.bulkCount += qty;
+          stats.bulkBaseUnits += qty * conversion;
+          stats.bulkRevenue += qty * (item.price || 0);
+        }
+      });
+    });
+
+    // 4. Gather products matching filters
+    const displayProducts = stockItems.filter(p => {
+      const matchesSearch = p.name.toLowerCase().includes(velocitySearch.toLowerCase()) || p.code.toLowerCase().includes(velocitySearch.toLowerCase());
+      const matchesCategory = velocityCategory === 'all' || p.category === velocityCategory;
+      return matchesSearch && matchesCategory;
+    });
+
+    // Compute aggregate metrics for KPIs
+    let aggregateBulkBase = 0;
+    let aggregateSubBase = 0;
+    let totalLooseAlerts = 0;
+
+    displayProducts.forEach(p => {
+      const stats = velocityMap[p.id];
+      if (stats) {
+        aggregateBulkBase += stats.bulkBaseUnits;
+        aggregateSubBase += stats.subBaseUnits;
+        
+        const totalBase = stats.bulkBaseUnits + stats.subBaseUnits;
+        if (totalBase > 0) {
+          const subPct = (stats.subBaseUnits / totalBase) * 100;
+          if (subPct >= 70) {
+            totalLooseAlerts++;
+          }
+        }
+      }
+    });
+
+    const aggregateTotalBase = aggregateBulkBase + aggregateSubBase;
+    const globalBulkShare = aggregateTotalBase > 0 ? Math.round((aggregateBulkBase / aggregateTotalBase) * 100) : 0;
+    const globalSubShare = aggregateTotalBase > 0 ? Math.round((aggregateSubBase / aggregateTotalBase) * 100) : 0;
+
+    const categories = Array.from(new Set(stockItems.map(x => x.category)));
+
+    return (
+      <div className="space-y-6">
+        {/* Dynamic Filters Bar */}
+        <div className="bg-slate-50 p-4 border border-slate-200 rounded-xl no-print">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            {/* Search Input */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">{t('Product Search')}</label>
+              <input
+                type="text"
+                value={velocitySearch}
+                onChange={(e) => setVelocitySearch(e.target.value)}
+                placeholder={t('Search by name or code...')}
+                className="w-full text-xs bg-white border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand focus:border-brand font-bold text-gray-700"
+              />
+            </div>
+
+            {/* Warehouse Select */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">{t('Warehouse / Store')}</label>
+              <select
+                value={velocityStoreId}
+                onChange={(e) => setVelocityStoreId(e.target.value)}
+                className="w-full text-xs bg-white border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand focus:border-brand font-bold text-gray-700"
+              >
+                <option value="all">{t('All Warehouses & Stores')}</option>
+                {stores.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Category Select */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">{t('Product Category')}</label>
+              <select
+                value={velocityCategory}
+                onChange={(e) => setVelocityCategory(e.target.value)}
+                className="w-full text-xs bg-white border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand focus:border-brand font-bold text-gray-700"
+              >
+                <option value="all">{t('All Categories')}</option>
+                {categories.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Start Date */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">{t('From Date')}</label>
+              <input
+                type="date"
+                value={txStartDate}
+                onChange={(e) => setTxStartDate(e.target.value)}
+                className="w-full text-xs bg-white border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand focus:border-brand font-bold text-gray-700"
+              />
+            </div>
+
+            {/* End Date */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">{t('To Date')}</label>
+              <input
+                type="date"
+                value={txEndDate}
+                onChange={(e) => setTxEndDate(e.target.value)}
+                className="w-full text-xs bg-white border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand focus:border-brand font-bold text-gray-700"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Aggregate KPI Display */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Total Units Sold */}
+          <div className="bg-slate-50 border p-4 rounded-xl flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-gray-400 block">{t('Total Units Sold')} ({t('Base')})</span>
+              <span className="text-xl font-black text-slate-800 mt-1 block">
+                {aggregateTotalBase} <span className="text-xs text-slate-400 font-bold">{t('units')}</span>
+              </span>
+            </div>
+            <div className="bg-slate-200/50 text-slate-600 p-2.5 rounded-lg">
+              <Calendar className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Bulk Case Volume */}
+          <div className="bg-amber-50/50 border border-amber-100 p-4 rounded-xl flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 block">{t('Bulk Package Velocity')}</span>
+              <span className="text-xl font-black text-amber-800 mt-1 block">
+                {aggregateBulkBase} <span className="text-xs font-bold text-amber-500">({globalBulkShare}%)</span>
+              </span>
+            </div>
+            <div className="bg-amber-100/50 text-amber-600 p-2.5 rounded-lg">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Loose Unit Volume */}
+          <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-blue-600 block">{t('Loose Sub-Unit Velocity')}</span>
+              <span className="text-xl font-black text-blue-800 mt-1 block">
+                {aggregateSubBase} <span className="text-xs font-bold text-blue-500">({globalSubShare}%)</span>
+              </span>
+            </div>
+            <div className="bg-blue-100/50 text-blue-600 p-2.5 rounded-lg">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+          </div>
+
+          {/* Replenishment Suggestion Alert count */}
+          <div className="bg-rose-50/50 border border-rose-100 p-4 rounded-xl flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-rose-600 block">{t('Warehouse Decant Alerts')}</span>
+              <span className="text-xl font-black text-rose-800 mt-1 block">
+                {totalLooseAlerts} <span className="text-xs text-rose-400 font-bold">{t('alerts')}</span>
+              </span>
+            </div>
+            <div className="bg-rose-100/50 text-rose-600 p-2.5 rounded-lg">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        {/* Detailed Velocity Data Table */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table id="unit-velocity-table" className="w-full text-xs text-left min-w-[950px]">
+              <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 uppercase font-bold text-[10px]">
+                <tr>
+                  <th className="px-4 py-3">{t('Product Details')}</th>
+                  <th className="px-4 py-3 text-center">{t('Unit Conversion Ratio')}</th>
+                  <th className="px-4 py-3 text-right">{t('Bulk Cases Sold')}</th>
+                  <th className="px-4 py-3 text-right">{t('Loose Units Sold')}</th>
+                  <th className="px-4 py-3 text-right">{t('Total Sold (Base Units)')}</th>
+                  <th className="px-4 py-3 text-right">{t('Sales Velocity (Units/Day)')}</th>
+                  <th className="px-4 py-3 text-center w-48">{t('Velocity Split (Bulk vs Loose)')}</th>
+                  <th className="px-4 py-3 text-center">{t('Warehouse Strategy')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-semibold text-gray-700">
+                {displayProducts.map(p => {
+                  const stats = velocityMap[p.id] || {
+                    bulkCount: 0,
+                    subCount: 0,
+                    bulkBaseUnits: 0,
+                    subBaseUnits: 0,
+                    bulkRevenue: 0,
+                    subRevenue: 0
+                  };
+
+                  const totalBaseUnits = stats.bulkBaseUnits + stats.subBaseUnits;
+                  const velocityPerDay = parseFloat((totalBaseUnits / daysCount).toFixed(2));
+                  const bulkPercentage = totalBaseUnits > 0 ? Math.round((stats.bulkBaseUnits / totalBaseUnits) * 100) : 0;
+                  const subPercentage = totalBaseUnits > 0 ? Math.round((stats.subBaseUnits / totalBaseUnits) * 100) : 0;
+
+                  // Determine recommendation strategy
+                  let badgeClass = "text-gray-500 bg-gray-50 border-gray-200";
+                  let badgeLabel = t('No Recent Sales');
+                  let strategyHint = t('Monitor stock and set promotions to boost velocity.');
+
+                  if (totalBaseUnits > 0) {
+                    if (p.useSubUnitPricing) {
+                      if (bulkPercentage >= 70) {
+                        badgeClass = "text-amber-700 bg-amber-50 border-amber-200";
+                        badgeLabel = t('Restock Bulk Packages');
+                        strategyHint = `${t('High bulk sales volume')} (${bulkPercentage}%). ${t('Replenish intact packages.')}`;
+                      } else if (subPercentage >= 70) {
+                        badgeClass = "text-blue-700 bg-blue-50 border-blue-200";
+                        badgeLabel = t('Pre-Unpack Bulk Stock');
+                        strategyHint = `${t('High loose/sub-unit demand')} (${subPercentage}%). ${t('Convert bulk packages to loose units.')}`;
+                      } else {
+                        badgeClass = "text-emerald-700 bg-emerald-50 border-emerald-200";
+                        badgeLabel = t('Balanced Restock');
+                        strategyHint = t('Balanced demand. Maintain stock of both bulk and loose items.');
+                      }
+                    } else {
+                      badgeClass = "text-slate-700 bg-slate-50 border-slate-200";
+                      badgeLabel = t('Standard Restock');
+                      strategyHint = t('Standard single-unit replenishment.');
+                    }
+                  }
+
+                  return (
+                    <tr key={p.id} className="hover:bg-gray-50/40">
+                      {/* Product details */}
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col">
+                          <span className="font-bold text-gray-900 block">{p.name}</span>
+                          <span className="text-[9px] font-mono text-gray-400 mt-0.5">{p.code} | <span className="bg-gray-100 text-gray-500 px-1 py-0.2 rounded font-sans">{p.category}</span></span>
+                        </div>
+                      </td>
+
+                      {/* Conversion Ratio */}
+                      <td className="px-4 py-3 text-center">
+                        {p.useSubUnitPricing ? (
+                          <span className="bg-indigo-50 text-indigo-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
+                            1 {p.unit || 'Pkg'} = {p.subUnitConversion || 1} {p.subUnitName || 'pcs'}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">1 {p.unit || 'pcs'}</span>
+                        )}
+                      </td>
+
+                      {/* Bulk Sales */}
+                      <td className="px-4 py-3 text-right">
+                        {p.useSubUnitPricing ? (
+                          <div className="flex flex-col">
+                            <span className="font-bold text-amber-700">{stats.bulkCount} {p.unit || 'Pkg'}</span>
+                            <span className="text-[9px] text-gray-400 font-semibold">({stats.bulkBaseUnits} {p.subUnitName || 'pcs'})</span>
+                          </div>
+                        ) : (
+                          <span className="font-bold text-gray-800">{stats.bulkCount} {p.unit || 'pcs'}</span>
+                        )}
+                      </td>
+
+                      {/* Loose Sales */}
+                      <td className="px-4 py-3 text-right text-blue-700">
+                        {p.useSubUnitPricing ? (
+                          <div className="flex flex-col">
+                            <span className="font-bold">{stats.subCount} {p.subUnitName || 'pcs'}</span>
+                            <span className="text-[9px] text-gray-400 font-semibold">({stats.subBaseUnits} {t('base')})</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+
+                      {/* Total base sold */}
+                      <td className="px-4 py-3 text-right font-black text-gray-900">
+                        {totalBaseUnits} <span className="text-[10px] text-gray-400 font-bold">{p.useSubUnitPricing ? (p.subUnitName || 'pcs') : (p.unit || 'pcs')}</span>
+                      </td>
+
+                      {/* Velocity per day */}
+                      <td className="px-4 py-3 text-right font-mono font-black text-indigo-600">
+                        {velocityPerDay} <span className="text-[9px] text-gray-400 font-sans">/ {t('day')}</span>
+                      </td>
+
+                      {/* Visual split progress bar */}
+                      <td className="px-4 py-3">
+                        {p.useSubUnitPricing && totalBaseUnits > 0 ? (
+                          <div className="flex flex-col gap-1">
+                            <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden flex shadow-inner border border-gray-200">
+                              <div
+                                style={{ width: `${bulkPercentage}%` }}
+                                className="bg-amber-400 h-full transition-all"
+                                title={`${t('Bulk')}: ${bulkPercentage}%`}
+                              />
+                              <div
+                                style={{ width: `${subPercentage}%` }}
+                                className="bg-blue-400 h-full transition-all"
+                                title={`${t('Loose')}: ${subPercentage}%`}
+                              />
+                            </div>
+                            <div className="flex justify-between text-[9px] text-gray-400 font-black">
+                              <span className="text-amber-600">{t('Bulk')} {bulkPercentage}%</span>
+                              <span className="text-blue-600">{t('Loose')} {subPercentage}%</span>
+                            </div>
+                          </div>
+                        ) : totalBaseUnits > 0 ? (
+                          <div className="w-full bg-slate-100 text-slate-400 text-[10px] text-center rounded py-1 border border-slate-200">
+                            {t('100% Standard Sales')}
+                          </div>
+                        ) : (
+                          <span className="text-gray-300 italic text-[10px] block text-center">-</span>
+                        )}
+                      </td>
+
+                      {/* Warehouse replenishment strategy */}
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col items-center gap-1">
+                          <span className={`px-2 py-0.5 rounded border text-[10px] font-bold text-center block ${badgeClass}`}>
+                            {badgeLabel}
+                          </span>
+                          <span className="text-[9px] text-gray-400 text-center block max-w-[150px] leading-tight font-semibold">
+                            {strategyHint}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {displayProducts.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="text-center py-10 text-gray-400 font-black text-xs">
+                      {t('No registered products match your filters.')}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   let currentTableId = 'report-tx-table';
   let reportTitle = '';
 
-  if (currentPage === 'report-transaction') {
+  if (currentPage === 'report-unit-velocity') {
+    currentTableId = 'unit-velocity-table';
+    reportTitle = t('Sub-Unit vs Bulk Velocity');
+  } else if (currentPage === 'report-transaction') {
     currentTableId = 'report-tx-table';
     reportTitle = t('Transaction Report');
   } else if (currentPage === 'report-daily') {
@@ -982,6 +1383,7 @@ export default function Reports({
 
   const renderContent = () => {
     switch (currentPage) {
+      case 'report-unit-velocity': return renderReportUnitVelocity();
       case 'report-transaction': return renderReportTransaction();
       case 'report-daily': return renderReportDaily();
       case 'report-monthly': return renderReportMonthly();

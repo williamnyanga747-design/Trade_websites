@@ -5,9 +5,10 @@ import { handlePrintWithFallback } from '../utils/printHelper';
 import { generateSalesOrderPDF } from '../utils/pdfGenerator';
 import { 
   Printer, FileSpreadsheet, Search, Eye, ShoppingBag, Truck, Calendar, X, 
-  FileText, Upload, Building2, Check, ShieldCheck, ShieldAlert, QrCode, Lock, RefreshCw, Trash2
+  FileText, Upload, Building2, Check, ShieldCheck, ShieldAlert, QrCode, Lock, RefreshCw, Trash2, Share2
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
+import { toast } from '../utils/toast';
 
 interface ReceiptsProps {
   salesOrders: SalesOrder[];
@@ -48,6 +49,7 @@ export default function Receipts({
   onUpdateStockItems,
   logAction
 }: ReceiptsProps) {
+  const canSetupReceipt = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin' || currentUser?.role === 'Store Admin';
   const [activeTab, setActiveTab] = useState<'selling' | 'buying'>('selling');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmModal, setConfirmModal] = useState<{
@@ -79,6 +81,19 @@ export default function Receipts({
   const [companyPhone, setCompanyPhone] = useState(() => localStorage.getItem('tradecore_receipt_company_phone') || '+255 26 250 1234');
   const [companyEmail, setCompanyEmail] = useState(() => localStorage.getItem('tradecore_receipt_company_email') || 'logistics@singidagrain.co.tz');
   const [showBrandingConfig, setShowBrandingConfig] = useState(false);
+  const [showWhatsAppInput, setShowWhatsAppInput] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState('');
+
+  useEffect(() => {
+    if (selectedReceipt && selectedReceipt.type === 'selling') {
+      const cust = customers.find(c => c.id === selectedReceipt.order.customerId);
+      if (cust) {
+        setWhatsappPhone(cust.phone || '');
+      }
+    } else {
+      setShowWhatsAppInput(false);
+    }
+  }, [selectedReceipt, customers]);
 
   // Load custom logo and reprint counts from localStorage on mount
   useEffect(() => {
@@ -112,6 +127,64 @@ export default function Receipts({
       });
     }
   }, [selectedReceipt]);
+
+  const submitWhatsAppShare = () => {
+    if (!whatsappPhone.trim()) {
+      toast.error(translate('Please enter a valid phone number') || 'Please enter a valid phone number');
+      return;
+    }
+    const cust = customers.find(c => c.id === selectedReceipt?.order.customerId);
+    const storeObj = stores.find(s => s.id === selectedReceipt?.order.storeId);
+    const compName = companyName || storeObj?.name || 'Singida Grain Millers Ltd';
+    const totalDisplay = formatMoney(selectedReceipt?.order.total || 0, currency || 'USD', exchangeRate || 1);
+
+    let itemsText = '';
+    selectedReceipt?.order.items.forEach((item: any, index: number) => {
+      const prod = stockItems.find(p => p.id === item.productId);
+      const prodName = prod ? prod.name : 'Unknown Product';
+      const itemPrice = formatMoney(item.price, currency || 'USD', exchangeRate || 1);
+      itemsText += `${index + 1}. ${prodName} x ${item.qty} @ ${itemPrice}\n`;
+    });
+
+    const textReceipt = `*RECEIPT / RISITI - ${compName}*\n` +
+      `-------------------------------------\n` +
+      `*Order No:* ${selectedReceipt?.order.soNumber}\n` +
+      `*Date / Tarehe:* ${selectedReceipt?.order.date}\n` +
+      `*Customer / Mteja:* ${cust?.name || 'Walk-in'}\n` +
+      `-------------------------------------\n` +
+      `*Items / Bidhaa:*\n${itemsText}` +
+      `-------------------------------------\n` +
+      `*TOTAL / JUMLA:* *${totalDisplay}*\n\n` +
+      `Thank you for shopping with us!\nAsanteni kwa kufanya biashara nasi! 🙏✨`;
+
+    // Try opening whatsapp
+    const cleanPhone = whatsappPhone.replace(/\D/g, ''); // strip non-numeric
+    const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(textReceipt)}`;
+    
+    // Copy to clipboard as robust fallback
+    let copied = false;
+    try {
+      navigator.clipboard.writeText(textReceipt);
+      copied = true;
+    } catch (err) {}
+
+    try {
+      window.open(whatsappUrl, '_blank');
+    } catch (err) {
+      console.warn('Could not open WhatsApp window', err);
+    }
+
+    setShowWhatsAppInput(false);
+    if (copied) {
+      toast.success(translate('Receipt copied to clipboard & WhatsApp opened!') || 'Receipt copied to clipboard & WhatsApp opened!');
+    } else {
+      toast.success(translate('WhatsApp opened!') || 'WhatsApp opened!');
+    }
+
+    if (logAction && selectedReceipt?.order) {
+      logAction('WhatsApp Receipt Shared', `Dispatched receipt for ${selectedReceipt.order.soNumber} to ${cleanPhone}`);
+    }
+  };
 
   const handleToggleVoid = (so: SalesOrder) => {
     if (!onUpdateSalesOrders || !onUpdateStockItems) return;
@@ -673,19 +746,34 @@ export default function Receipts({
                       <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600" /> PDF Invoice
                     </button>
                   )}
-                  {/* Toggle receipt config settings */}
-                  <button
-                    onClick={() => setShowBrandingConfig(!showBrandingConfig)}
-                    className={`border px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm ${
-                      showBrandingConfig 
-                        ? 'bg-amber-100 text-amber-800 border-amber-300' 
-                        : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
-                    }`}
-                    title={translate('Configure Custom Company Details') || 'Configure custom details'}
-                  >
-                    <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                    {showBrandingConfig ? (translate('Hide Settings') || 'Hide Settings') : (translate('Receipt Setup') || 'Receipt Setup')}
-                  </button>
+                  {selectedReceipt.type === 'selling' && (
+                    <button
+                      onClick={() => setShowWhatsAppInput(!showWhatsAppInput)}
+                      className={`px-2.5 py-1.5 border rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm ${
+                        showWhatsAppInput 
+                          ? 'bg-[#128C7E] text-white border-[#128C7E]' 
+                          : 'bg-[#25D366] hover:bg-[#128C7E] text-white border-[#25D366]'
+                      }`}
+                      title={translate('Share via WhatsApp') || 'Share via WhatsApp'}
+                    >
+                      <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" /> WhatsApp
+                    </button>
+                  )}
+                                    {/* Toggle receipt config settings */}
+                  {canSetupReceipt && (
+                    <button
+                      onClick={() => setShowBrandingConfig(!showBrandingConfig)}
+                      className={`border px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition shrink-0 shadow-sm ${
+                        showBrandingConfig 
+                          ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                          : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
+                      }`}
+                      title={translate('Configure Custom Company Details') || 'Configure custom details'}
+                    >
+                      <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      {showBrandingConfig ? (translate('Hide Settings') || 'Hide Settings') : (translate('Receipt Setup') || 'Receipt Setup')}
+                    </button>
+                  )}
                   <button
                     onClick={() => { setSelectedReceipt(null); setShowSecurityCheck(false); }}
                     className="p-1.5 hover:bg-gray-200 rounded text-gray-500 ml-1 shrink-0"
@@ -695,8 +783,32 @@ export default function Receipts({
                 </div>
               </div>
 
+              {/* WhatsApp Receipt Panel */}
+              {showWhatsAppInput && (
+                <div className="p-4 bg-emerald-50 border-b no-print text-xs animate-fade-in space-y-2">
+                  <label className="text-[10px] font-bold text-emerald-800 block tracking-wider uppercase">
+                    {translate('Share via WhatsApp') || 'Share via WhatsApp'}
+                  </label>
+                  <div className="flex gap-2 max-w-md">
+                    <input
+                      type="text"
+                      value={whatsappPhone}
+                      onChange={(e) => setWhatsappPhone(e.target.value)}
+                      placeholder="e.g. 255712345678"
+                      className="flex-1 px-3 py-1.5 border border-emerald-300 rounded-lg outline-none bg-white font-semibold text-gray-800 focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <button
+                      onClick={submitWhatsAppShare}
+                      className="px-4 py-1.5 bg-[#25D366] hover:bg-[#128C7E] text-white font-bold rounded-lg text-xs transition shrink-0"
+                    >
+                      {translate('Send') || 'Send'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* CUSTOM COMPANY BRANDING DETAILS & LOGO UPLOADER (No-Print) */}
-              {showBrandingConfig && (
+              {canSetupReceipt && showBrandingConfig && (
                 <div className="p-4 bg-gray-50/50 border-b grid grid-cols-1 md:grid-cols-3 gap-4 no-print text-xs animate-fade-in shrink-0 max-h-[35vh] overflow-y-auto">
                   <div className="md:col-span-2 space-y-3">
                     <span className="text-[10px] font-bold text-gray-500 block tracking-wider uppercase">Configure Custom Company Details</span>

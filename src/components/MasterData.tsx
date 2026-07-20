@@ -9,6 +9,7 @@ import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { performCascadeDelete } from '../utils/cascadeDelete';
 import { toast } from '../utils/toast';
+import { getStoreCategories, cleanCategoryName } from '../utils/categoryHelper';
 
 interface MasterDataProps {
   currentPage: string;
@@ -172,14 +173,15 @@ export default function MasterData({
   };
 
   const handleDeleteCategory = (catName: string) => {
+    const cleanName = cleanCategoryName(catName);
     setConfirmModal({
       isOpen: true,
       title: t('Delete Category'),
-      description: `${t('Are you sure you want to permanently delete category')} "${catName}"?`,
+      description: `${t('Are you sure you want to permanently delete category')} "${cleanName}"?`,
       onConfirm: () => {
         const updatedCategories = categories.filter(c => c !== catName);
         saveAllData({ categories: updatedCategories });
-        logAction('Delete Category', `Deleted Category: ${catName}`);
+        logAction('Delete Category', `Deleted Category: ${cleanName}`);
       }
     });
   };
@@ -407,16 +409,22 @@ export default function MasterData({
       }
     } else if (type === 'category') {
       if (!data.name?.trim()) return;
-      const newCatName = data.name.trim();
+      const cleanName = data.name.trim();
+      const newCatName = currentStoreId ? `${currentStoreId}:${cleanName}` : cleanName;
       if (categories.includes(newCatName)) {
         toast.warning(t('Category already exists!'));
         return;
       }
       saveAllData({ categories: [...categories, newCatName] });
-      logAction('Create Category', `Created Category: ${newCatName}`);
+      logAction('Create Category', `Created Category: ${cleanName}`);
     } else if (type === 'tax') {
       const rate = parseFloat(data.rate) || 0;
-      const cleanData = { ...data, rate, type: 'Percentage' };
+      const cleanData = { 
+        ...data, 
+        rate, 
+        type: 'Percentage',
+        storeId: data.storeId !== undefined ? data.storeId : currentStoreId
+      };
       if (data.id) {
         const updated = taxes.map(t => t.id === data.id ? cleanData : t);
         saveAllData({ taxes: updated });
@@ -776,13 +784,14 @@ export default function MasterData({
                   <th className="px-6 py-3">{t('Name')}</th>
                   <th className="px-6 py-3">{t('Type')}</th>
                   <th className="px-6 py-3">{t('Contact')}</th>
+                  <th className="px-6 py-3">{t('Assigned Store')}</th>
                   <th className="px-6 py-3 text-right">{t('Credit Limit')}</th>
                   <th className="px-6 py-3 text-right">{t('Balance')}</th>
                   <th className="px-6 py-3 w-32 text-right"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {customers.map(c => (
+                {customers.filter(c => !c.storeId || c.storeId === currentStoreId).map(c => (
                   <tr key={c.id} className="hover:bg-gray-50/50">
                     <td className="px-6 py-4 font-bold text-gray-900">{c.name}</td>
                     <td className="px-6 py-4">
@@ -797,6 +806,9 @@ export default function MasterData({
                     <td className="px-6 py-4 text-gray-500 font-semibold">
                       <div>{c.phone}</div>
                       <div className="text-[10px] font-mono">{c.email}</div>
+                    </td>
+                    <td className="px-6 py-4 text-gray-600 font-semibold whitespace-nowrap">
+                      {c.storeId ? stores.find(st => st.id === c.storeId)?.name || t('Unknown Store') : t('All Stores')}
                     </td>
                     <td className="px-6 py-4 text-right font-semibold">{fmt(c.creditLimit)}</td>
                     <td className={`px-6 py-4 text-right font-bold ${c.balance > 0 ? 'text-red-600' : 'text-gray-700'}`}>
@@ -863,17 +875,21 @@ export default function MasterData({
                   <th className="px-6 py-3">{t('Name')}</th>
                   <th className="px-6 py-3">{t('Contact Person')}</th>
                   <th className="px-6 py-3">{t('Phone / Email')}</th>
+                  <th className="px-6 py-3">{t('Assigned Store')}</th>
                   <th className="px-6 py-3 w-32 text-right"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {suppliers.map(s => (
+                {suppliers.filter(s => !s.storeId || s.storeId === currentStoreId).map(s => (
                   <tr key={s.id} className="hover:bg-gray-50/50">
                     <td className="px-6 py-4 font-bold text-gray-900">{s.name}</td>
                     <td className="px-6 py-4 text-gray-600 font-bold">{s.contact}</td>
                     <td className="px-6 py-4 text-gray-500 font-semibold">
                       <div>{s.phone}</div>
                       <div className="text-[10px] font-mono">{s.email}</div>
+                    </td>
+                    <td className="px-6 py-4 text-gray-600 font-semibold whitespace-nowrap">
+                      {s.storeId ? stores.find(st => st.id === s.storeId)?.name || t('Unknown Store') : t('All Stores')}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-1.5">
@@ -923,9 +939,9 @@ export default function MasterData({
             )}
           </div>
           <ul className="divide-y divide-gray-100">
-            {categories.map((c, i) => (
+            {getStoreCategories(categories, currentStoreId).map((c, i) => (
               <li key={i} className="px-6 py-4 flex justify-between items-center hover:bg-gray-50/50">
-                <span className="font-bold text-gray-800">{c}</span>
+                <span className="font-bold text-gray-800">{cleanCategoryName(c)}</span>
                 {isAdmin && (
                   <button
                     onClick={() => handleDeleteCategory(c)}
@@ -963,16 +979,20 @@ export default function MasterData({
                 <tr>
                   <th className="px-6 py-3">{t('Product Scope')}</th>
                   <th className="px-6 py-3">{t('Tax Name')}</th>
+                  <th className="px-6 py-3">{t('Assigned Store')}</th>
                   <th className="px-6 py-3 text-center">{t('Active Items')}</th>
                   <th className="px-6 py-3 text-center">{t('Rate (%)')}</th>
                   <th className="px-6 py-3 w-32 text-right"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {taxes.map(tData => (
+                {taxes.filter(t => !t.storeId || t.storeId === currentStoreId).map(tData => (
                   <tr key={tData.id} className="hover:bg-gray-50/50">
                     <td className="px-6 py-4 font-bold text-brand">{t('Various Products')}</td>
                     <td className="px-6 py-4 font-bold text-gray-900">{tData.name}</td>
+                    <td className="px-6 py-4 text-gray-600 font-semibold whitespace-nowrap">
+                      {tData.storeId ? stores.find(st => st.id === tData.storeId)?.name || t('Unknown Store') : t('All Stores')}
+                    </td>
                     <td className="px-6 py-4 text-center font-bold text-gray-500">{stockItems.length}</td>
                     <td className="px-6 py-4 text-center font-bold text-gray-700">{tData.rate}%</td>
                     <td className="px-6 py-4 text-right">
@@ -1819,6 +1839,19 @@ export default function MasterData({
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-brand"
                     />
                   </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-600 mb-1.5 block uppercase tracking-wider">{t('Assigned Store')}</label>
+                    <select
+                      value={data.storeId || ''}
+                      onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, storeId: e.target.value ? Number(e.target.value) : null } })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white font-semibold focus:border-brand"
+                    >
+                      <option value="">{t('All Stores')}</option>
+                      {stores.map(st => (
+                        <option key={st.id} value={st.id}>{st.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </>
               )}
 
@@ -1860,6 +1893,19 @@ export default function MasterData({
                       onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, email: e.target.value } })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-brand"
                     />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-600 mb-1.5 block uppercase tracking-wider">{t('Assigned Store')}</label>
+                    <select
+                      value={data.storeId || ''}
+                      onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, storeId: e.target.value ? Number(e.target.value) : null } })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white font-semibold focus:border-brand"
+                    >
+                      <option value="">{t('All Stores')}</option>
+                      {stores.map(st => (
+                        <option key={st.id} value={st.id}>{st.name}</option>
+                      ))}
+                    </select>
                   </div>
                 </>
               )}

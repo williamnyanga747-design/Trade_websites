@@ -33,7 +33,7 @@ export default function Sidebar({
   // Helper for submenus to check if any of their children is active
   const isMasterActive = ['companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate'].includes(currentPage);
   const isImportActive = ['import-stock', 'import-customers', 'import-suppliers'].includes(currentPage);
-  const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts'].includes(currentPage);
+  const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts', 'report-unit-velocity'].includes(currentPage);
   const isUserActive = ['user-info', 'user-access'].includes(currentPage);
 
   const [showMasters, setShowMasters] = useState(isMasterActive);
@@ -471,6 +471,16 @@ export default function Sidebar({
                     }`}
                   >
                     {t('POS Shift & Drawer Ledger')}
+                  </button>
+                )}
+                {isAllowed('report-unit-velocity') && (
+                  <button
+                    onClick={() => onNavigate('report-unit-velocity')}
+                    className={`w-full text-left px-3 py-1.5 rounded transition ${
+                      currentPage === 'report-unit-velocity' ? 'text-white font-bold text-xs' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {t('Sub-Unit vs Bulk Velocity')}
                   </button>
                 )}
               </div>

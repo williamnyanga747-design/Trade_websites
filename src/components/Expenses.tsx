@@ -257,14 +257,12 @@ export default function Expenses({
             <span className="text-xs font-black text-red-600">{formatMoney(totalFilteredAmt, currency, exchangeRate)}</span>
           </div>
           
-          {isAdmin && (
-            <button
-              onClick={handleOpenAdd}
-              className="bg-brand hover:bg-brand-hover text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap shadow-sm"
-            >
-              <Plus className="w-4 h-4" /> Log Expense
-            </button>
-          )}
+          <button
+            onClick={handleOpenAdd}
+            className="bg-brand hover:bg-brand-hover text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Log Expense
+          </button>
         </div>
       </div>
 
@@ -389,7 +387,7 @@ export default function Expenses({
                 <th className="px-5 py-3">Store Location</th>
                 <th className="px-5 py-3">Payment Method</th>
                 <th className="px-5 py-3 text-right">Amount</th>
-                {isAdmin && <th className="px-5 py-3 w-20"></th>}
+                <th className="px-5 py-3 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -408,16 +406,16 @@ export default function Expenses({
                   <td className="px-5 py-3 text-right font-bold text-gray-900">
                     {formatMoney(exp.amount, currency, exchangeRate)}
                   </td>
-                  {isAdmin && (
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-1.5 justify-end">
-                        <button
-                          onClick={() => handleOpenEdit(exp)}
-                          className="p-1 hover:bg-gray-100 rounded text-blue-600"
-                          title="Modify"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <button
+                        onClick={() => handleOpenEdit(exp)}
+                        className="p-1 hover:bg-gray-100 rounded text-blue-600"
+                        title="Modify"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {isAdmin && (
                         <button
                           onClick={() => handleDelete(exp.id, exp.expenseNumber)}
                           className="p-1 hover:bg-red-50 rounded text-red-600"
@@ -425,14 +423,14 @@ export default function Expenses({
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
-                      </div>
-                    </td>
-                  )}
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {filteredExpenses.length === 0 && (
                 <tr>
-                  <td colSpan={isAdmin ? 8 : 7} className="px-5 py-8 text-center text-gray-400">
+                  <td colSpan={8} className="px-5 py-8 text-center text-gray-400">
                     <AlertCircle className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                     No expenses logged for current store context.
                   </td>

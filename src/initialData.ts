@@ -39,6 +39,12 @@ export const defaultRolePermissions: Record<string, string[]> = {
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-daily', 'report-sales', 'report-purchase',
     'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts'
+  ],
+  'Store Admin': [
+    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
+    'report-transaction', 'report-daily', 'report-sales', 'report-purchase',
+    'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts',
+    'user-info'
   ]
 };
 

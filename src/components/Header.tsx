@@ -58,11 +58,9 @@ export default function Header({
       .map(b => b.id);
     availableStores = availableStores.filter(s => userCompanyBranchIds.includes(s.branchId));
 
-    // Restrict operators (Retailer/Wholesaler) only to their exact assigned store
-    if (currentUser.role === 'Retailer' || currentUser.role === 'Wholesaler') {
-      if (currentUser.storeId) {
-        availableStores = availableStores.filter(s => s.id === currentUser.storeId);
-      }
+    // Restrict operators only to their exact assigned store if it is set
+    if (currentUser.storeId) {
+      availableStores = availableStores.filter(s => s.id === currentUser.storeId);
     }
   }
 

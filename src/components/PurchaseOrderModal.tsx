@@ -35,9 +35,20 @@ export default function PurchaseOrderModal({
   settings,
   t
 }: PurchaseOrderModalProps) {
-  const [selectedSupplierId, setSelectedSupplierId] = useState<number>(suppliers[0]?.id || 1);
   const activeStores = stores.filter(s => !s.isDeleted);
   const [selectedStoreId, setSelectedStoreId] = useState<number>(currentStoreId || activeStores[0]?.id || 1);
+
+  const activeSuppliersForStore = useMemo(() => {
+    return suppliers.filter(s => !s.storeId || s.storeId === selectedStoreId);
+  }, [suppliers, selectedStoreId]);
+
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number>(activeSuppliersForStore[0]?.id || 1);
+
+  React.useEffect(() => {
+    if (activeSuppliersForStore.length > 0 && !activeSuppliersForStore.some(s => s.id === selectedSupplierId)) {
+      setSelectedSupplierId(activeSuppliersForStore[0].id);
+    }
+  }, [activeSuppliersForStore, selectedSupplierId]);
   const [searchQuery, setSearchQuery] = useState('');
   const [poItems, setPoItems] = useState<{ productId: number; qty: number; cost: number }[]>([]);
   const [receiveImmediately, setReceiveImmediately] = useState(false);
@@ -280,7 +291,7 @@ export default function PurchaseOrderModal({
                     onChange={(e) => setSelectedSupplierId(Number(e.target.value))}
                     className="w-full px-2.5 py-1.5 border rounded-lg text-xs bg-white font-semibold outline-none"
                   >
-                    {suppliers.map(s => (
+                    {activeSuppliersForStore.map(s => (
                       <option key={s.id} value={s.id}>{s.name}</option>
                     ))}
                   </select>

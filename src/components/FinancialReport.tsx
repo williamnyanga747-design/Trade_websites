@@ -52,7 +52,7 @@ export default function FinancialReport({
   const [showEmailPreview, setShowEmailPreview] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
-  const [targetEmail, setTargetEmail] = useState('williamnyanga747@gmail.com');
+  const [targetEmail, setTargetEmail] = useState('globaltradecore@gmail.com');
 
   const getStoreName = (id: number) => {
     return stores.find(s => s.id === id)?.name || `Store #${id}`;

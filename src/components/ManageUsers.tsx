@@ -227,7 +227,7 @@ export default function ManageUsers({
   const saveDynamicPermissions = () => {
     if (!isSuperAdmin) return;
 
-    const roles = ['Admin', 'Retailer', 'Wholesaler'];
+    const roles = ['Admin', 'Store Admin', 'Retailer', 'Wholesaler'];
     const updatedPermissions: Record<string, string[]> = {
       'Super Admin': [
         'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
@@ -238,6 +238,7 @@ export default function ManageUsers({
         'user-info', 'user-access'
       ],
       'Admin': [],
+      'Store Admin': [],
       'Retailer': [],
       'Wholesaler': []
     };
@@ -389,6 +390,7 @@ export default function ManageUsers({
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                           u.role === 'Admin' ? 'bg-red-100 text-red-800' :
+                          u.role === 'Store Admin' ? 'bg-emerald-100 text-emerald-800' :
                           u.role === 'Retailer' ? 'bg-blue-100 text-blue-800' :
                           u.role === 'Super Admin' ? 'bg-purple-100 text-purple-800' :
                           'bg-amber-100 text-amber-800'
@@ -541,7 +543,7 @@ export default function ManageUsers({
       return <div className="p-4 bg-red-100 text-red-800 rounded-lg">{t('Access Denied')}</div>;
     }
 
-    const roles = ['Admin', 'Retailer', 'Wholesaler'];
+    const roles = ['Admin', 'Store Admin', 'Retailer', 'Wholesaler'];
     
     // Fallback sync for selectedStaffId if not selected or invalid
     const activeStaffId = selectedStaffId !== null ? selectedStaffId : (staffToRender[0]?.id || null);
@@ -994,8 +996,8 @@ export default function ManageUsers({
     if (!editingUser) return null;
     const isEdit = editingUser.id > 0;
 
-    let roleOpts = ['Admin', 'Retailer', 'Wholesaler'];
-    if (isSuperAdmin) roleOpts = ['Super Admin', 'Admin', 'Retailer', 'Wholesaler'];
+    let roleOpts = ['Admin', 'Store Admin', 'Retailer', 'Wholesaler'];
+    if (isSuperAdmin) roleOpts = ['Super Admin', 'Admin', 'Store Admin', 'Retailer', 'Wholesaler'];
 
     const activeCompanyId = isSuperAdmin ? (editingUser.companyId || currentCompanyId || 1) : currentCompanyId;
 

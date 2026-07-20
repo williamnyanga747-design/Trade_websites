@@ -28,7 +28,7 @@ export interface User {
   id: number;
   username: string;
   password?: string; // Kept secure or editable
-  role: 'Super Admin' | 'Admin' | 'Retailer' | 'Wholesaler';
+  role: 'Super Admin' | 'Admin' | 'Store Admin' | 'Retailer' | 'Wholesaler';
   name: string;
   email: string;
   companyId: number | null;
@@ -50,10 +50,16 @@ export interface StockItem {
   wholesalePrice: number;
   partnerPrice?: number;
   lowStockQty: number;
-  unit?: 'Kg' | 'Litres' | 'Package';
+  unit?: string;
   imageUrl?: string;
   expiryDate?: string; // Optional Expiry Date field (YYYY-MM-DD)
   expiryDates?: { [storeId: number]: string }; // Store-specific expiry dates (storeId -> YYYY-MM-DD)
+  useSubUnitPricing?: boolean;
+  subUnitName?: string;
+  subUnitConversion?: number;
+  subUnitRetailPrice?: number;
+  subUnitWholesalePrice?: number;
+  subUnitPartnerPrice?: number;
 }
 
 export interface POItem {
@@ -78,6 +84,8 @@ export interface SOItem {
   qty: number;
   price: number;
   cost: number;
+  unitType?: 'main' | 'sub';
+  subUnitName?: string;
 }
 
 export interface SalesOrder {
@@ -109,6 +117,7 @@ export interface Tax {
   name: string;
   rate: number;
   type: 'Percentage';
+  storeId?: number | null;
 }
 
 export interface Supplier {
@@ -117,6 +126,7 @@ export interface Supplier {
   phone: string;
   email: string;
   contact: string;
+  storeId?: number | null;
 }
 
 export interface Customer {
@@ -127,6 +137,7 @@ export interface Customer {
   email: string;
   creditLimit: number;
   balance: number;
+  storeId?: number | null;
 }
 
 export interface AuditTrail {

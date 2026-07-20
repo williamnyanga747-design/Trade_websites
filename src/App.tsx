@@ -30,6 +30,7 @@ import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
 import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
 import { toast, Toast } from './utils/toast';
+import { getStoreCategories, cleanCategoryName } from './utils/categoryHelper';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Cell, PieChart, Pie
 } from 'recharts';
@@ -38,9 +39,9 @@ import {
 import {
   LayoutDashboard, Package, ShoppingCart, Receipt, DollarSign, FileText, Database, FileUp,
   BarChart3, Users, UserCircle, LogOut, Settings as SettingsIcon, Search, Plus, ArrowLeftRight,
-  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X, XCircle,
+  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X, XCircle, Check,
   ShieldAlert, DollarSign as DollarIcon, CreditCard, Monitor, Barcode, Store as StoreIcon,
-  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck
+  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 // Helper function to darken/lighten hex colors dynamically
@@ -218,8 +219,10 @@ export default function App() {
   // Modals for Stock
   const [showStockModal, setShowStockModal] = useState(false);
   const [editingStockItem, setEditingStockItem] = useState<StockItem | null>(null);
+  const [formUseSubUnit, setFormUseSubUnit] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferProductId, setTransferProductId] = useState<number | null>(null);
+  const [expandedStockIds, setExpandedStockIds] = useState<number[]>([]);
   
   // Stock list filters
   const [stockSearchQuery, setStockSearchQuery] = useState('');
@@ -447,8 +450,21 @@ export default function App() {
       }
     });
 
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'tradecore_data' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          applyData(parsed);
+        } catch (err) {
+          console.error('[Sync] Local storage event parse failed', err);
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
     return () => {
       unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
@@ -1829,7 +1845,7 @@ export default function App() {
         .map(b => b.id);
       result = result.filter(s => userCompanyBranchIds.includes(s.branchId));
       
-      if (currentUser.role === 'Retailer' || currentUser.role === 'Wholesaler') {
+      if (currentUser.role === 'Retailer' || currentUser.role === 'Wholesaler' || currentUser.role === 'Store Admin') {
         if (currentUser.storeId) {
           result = result.filter(s => s.id === currentUser.storeId);
         }
@@ -1965,6 +1981,10 @@ export default function App() {
       pages = Array.from(adminPages);
     }
     
+    if (pages.includes('report-transaction') && !pages.includes('report-unit-velocity')) {
+      pages = [...pages, 'report-unit-velocity'];
+    }
+    
     return pages;
   }, [currentUser, rolePermissions]);
   const t = (text: string) => translate(text, settings.language);
@@ -1974,6 +1994,30 @@ export default function App() {
   const getCustomerName = (id: number) => customers.find(c => c.id === id)?.name || 'Direct Customer';
   const getSupplierName = (id: number) => suppliers.find(s => s.id === id)?.name || 'Direct Supplier';
   const getProductName = (id: number) => stockItems.find(p => p.id === id)?.name || 'Product Item';
+
+  const formatStockQty = (qty: number, item: StockItem) => {
+    if (item.useSubUnitPricing && item.subUnitConversion && item.subUnitConversion > 1) {
+      const mainUnits = Math.floor(qty / item.subUnitConversion);
+      const subUnits = parseFloat((qty % item.subUnitConversion).toFixed(4));
+      
+      const mainLabel = item.unit || 'Pkg';
+      const subLabel = item.subUnitName || 'pcs';
+      
+      if (mainUnits > 0 && subUnits > 0) {
+        return `${mainUnits} ${mainLabel}, ${subUnits} ${subLabel}`;
+      } else if (mainUnits > 0) {
+        return `${mainUnits} ${mainLabel}`;
+      } else {
+        return `${subUnits} ${subLabel}`;
+      }
+    }
+    return `${qty} ${item.unit || 'pcs'}`;
+  };
+
+  const isItemLowStock = (p: StockItem, qty: number) => {
+    const conversion = p.useSubUnitPricing ? (p.subUnitConversion || 1) : 1;
+    return (qty / conversion) <= p.lowStockQty;
+  };
 
   // --- SUB-PANEL RENDERS ---
   
@@ -2471,7 +2515,10 @@ export default function App() {
   const handleApproveShip = (transfer: StockTransfer) => {
     const item = stockItems.find(p => p.id === transfer.productId);
     if (!item) return;
-    if ((item.stock?.[transfer.fromStoreId] || 0) < transfer.qty) {
+    const conversion = item.useSubUnitPricing ? (item.subUnitConversion || 1) : 1;
+    const transferQtyInBaseUnits = transfer.qty * conversion;
+
+    if ((item.stock?.[transfer.fromStoreId] || 0) < transferQtyInBaseUnits) {
       toast.error(t('Insufficient stock weights in the source store.'));
       return;
     }
@@ -2479,7 +2526,7 @@ export default function App() {
     const updatedStock = stockItems.map(p => {
       if (p.id === transfer.productId) {
         const nextStockObj = { ...p.stock };
-        nextStockObj[transfer.fromStoreId] = (nextStockObj[transfer.fromStoreId] || 0) - transfer.qty;
+        nextStockObj[transfer.fromStoreId] = (nextStockObj[transfer.fromStoreId] || 0) - transferQtyInBaseUnits;
         return { ...p, stock: nextStockObj };
       }
       return p;
@@ -2500,12 +2547,14 @@ export default function App() {
   const handleReceiveComplete = (transfer: StockTransfer) => {
     const item = stockItems.find(p => p.id === transfer.productId);
     if (!item) return;
+    const conversion = item.useSubUnitPricing ? (item.subUnitConversion || 1) : 1;
+    const transferQtyInBaseUnits = transfer.qty * conversion;
 
     // Add to receiving store!
     const updatedStock = stockItems.map(p => {
       if (p.id === transfer.productId) {
         const nextStockObj = { ...p.stock };
-        nextStockObj[transfer.toStoreId] = (nextStockObj[transfer.toStoreId] || 0) + transfer.qty;
+        nextStockObj[transfer.toStoreId] = (nextStockObj[transfer.toStoreId] || 0) + transferQtyInBaseUnits;
         return { ...p, stock: nextStockObj };
       }
       return p;
@@ -2539,6 +2588,12 @@ export default function App() {
     saveAllData({ stockTransfers: updatedTransfers });
     logAction('Stock Transfer Rejected', `Rejected transfer of ${transfer.qty}x ${item.name}.`);
     toast.success(t('Stock transfer request rejected and cancelled.'));
+  };
+
+  const handleDeleteTransfer = (transferId: number) => {
+    const updatedTransfers = stockTransfers.filter(t => t.id !== transferId);
+    saveAllData({ stockTransfers: updatedTransfers });
+    toast.success(t('Stock transfer manifest deleted successfully.'));
   };
 
   // 2. Stock items component controller
@@ -2583,7 +2638,10 @@ export default function App() {
       `;
       
       filteredStockItems.forEach(p => {
-        const globalStock = (Object.values(p.stock || {}) as number[]).reduce((a, b) => a + b, 0);
+        const allowedStoreIds = visibleStores.map(s => s.id);
+        const globalStock = Object.entries(p.stock || {})
+          .filter(([sid]) => allowedStoreIds.includes(Number(sid)))
+          .reduce((sum, [_, qty]) => sum + (Number(qty) || 0), 0);
         const totalValue = globalStock * p.purchasePrice;
         
         tableHtml += `
@@ -2611,13 +2669,18 @@ export default function App() {
       });
       
       // Add total rows
+      const allowedStoreIds = visibleStores.map(s => s.id);
       const grandTotalValue = filteredStockItems.reduce((acc, p) => {
-        const globalStock = (Object.values(p.stock || {}) as number[]).reduce((a, b) => a + b, 0);
+        const globalStock = Object.entries(p.stock || {})
+          .filter(([sid]) => allowedStoreIds.includes(Number(sid)))
+          .reduce((sum, [_, qty]) => sum + (Number(qty) || 0), 0);
         return acc + (globalStock * p.purchasePrice);
       }, 0);
       
       const totalGlobalStockSum = filteredStockItems.reduce((acc, p) => {
-        const globalStock = (Object.values(p.stock || {}) as number[]).reduce((a, b) => a + b, 0);
+        const globalStock = Object.entries(p.stock || {})
+          .filter(([sid]) => allowedStoreIds.includes(Number(sid)))
+          .reduce((sum, [_, qty]) => sum + (Number(qty) || 0), 0);
         return acc + globalStock;
       }, 0);
       
@@ -2645,8 +2708,175 @@ export default function App() {
       exportToExcel(tableHtml, `Stock_Inventory_Report_${new Date().toISOString().split('T')[0]}`);
     };
 
+    const AIAssistantPanel = () => {
+      const [isAiOpen, setIsAiOpen] = useState(false);
+      const [aiPrompt, setAiPrompt] = useState('');
+      const [aiLoading, setAiLoading] = useState(false);
+      const [aiResponse, setAiResponse] = useState<any>(null);
+
+      const handleAskAI = async () => {
+        if (!aiPrompt.trim()) return;
+        setAiLoading(true);
+        setAiResponse(null);
+        try {
+          const response = await fetch('/api/ai-assist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: aiPrompt,
+              products: activeStockItems.map(p => ({
+                id: p.id,
+                name: p.name,
+                code: p.code,
+                category: p.category,
+                stock_qty: p.stock?.[storeId] || 0,
+                useSubUnitPricing: p.useSubUnitPricing,
+                unit: p.unit,
+                subUnitName: p.subUnitName,
+                subUnitConversion: p.subUnitConversion,
+                purchasePrice: p.purchasePrice,
+                retailPrice: p.retailPrice,
+                wholesalePrice: p.wholesalePrice,
+                subUnitRetailPrice: p.subUnitRetailPrice,
+                subUnitWholesalePrice: p.subUnitWholesalePrice,
+              })),
+              priceType: 'Retail'
+            })
+          });
+          const data = await response.json();
+          setAiResponse(data);
+        } catch (err: any) {
+          console.error("AI error", err);
+          setAiResponse({ success: false, explanation: "Failed to query AI. Ensure server is running and GEMINI_API_KEY is configured." });
+        } finally {
+          setAiLoading(false);
+        }
+      };
+
+      const handleApplyAdjustment = () => {
+        if (!aiResponse || !aiResponse.actions) return;
+        const updatedStockItems = activeStockItems.map(item => {
+          const matchingActions = aiResponse.actions.filter((act: any) => act.productId === item.id);
+          if (matchingActions.length === 0) return item;
+
+          const nextStock = { ...item.stock };
+          matchingActions.forEach((action: any) => {
+            const conversion = item.subUnitConversion || 1;
+            const deductionInMainUnit = action.unitType === 'sub' ? action.qty / conversion : action.qty;
+            nextStock[storeId] = (nextStock[storeId] || 0) - deductionInMainUnit;
+          });
+
+          return { ...item, stock: nextStock };
+        });
+
+        saveAllData({ stockItems: updatedStockItems });
+        logAction('AI Stock Adjustment', `Adjusted inventory via AI Assistant for: ${aiResponse.actions.map((a: any) => a.productName).join(', ')}`);
+        toast.success(t('Inventory adjusted successfully based on AI recommendations!'));
+        setAiResponse(null);
+        setAiPrompt('');
+      };
+
+      return (
+        <div className="bg-gradient-to-r from-brand/5 to-indigo-50/40 rounded-xl border border-brand/20 shadow-sm p-4 no-print space-y-3">
+          <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsAiOpen(!isAiOpen)}>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center font-bold">
+                ✨
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900 text-xs sm:text-sm">{t('AI Stock & Pricing Copilot')}</h4>
+                <p className="text-[10px] text-gray-500 font-medium">{t('Ask to process sales, loose units (bread, flour) and check pricing rules')}</p>
+              </div>
+            </div>
+            <button className="text-xs font-semibold text-brand hover:text-brand-hover">
+              {isAiOpen ? t('Collapse') : t('Expand Assistant')}
+            </button>
+          </div>
+
+          {isAiOpen && (
+            <div className="pt-2 border-t border-brand/10 space-y-3 animate-fadeIn">
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="flex-1">
+                  <textarea
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder={t("e.g. 'A retail customer is buying 3 loose loaves of bread individually' or 'A Wholesaler wants 1 full sack and 2 kg of flour'")}
+                    className="w-full h-16 p-2.5 border border-gray-200 rounded-lg text-xs font-semibold outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand bg-white resize-none"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5 shrink-0 justify-end">
+                  <button
+                    onClick={handleAskAI}
+                    disabled={aiLoading}
+                    className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {aiLoading ? (
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : '✨'} {t('Ask Copilot')}
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Prompts */}
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <span className="text-[9px] text-gray-400 font-bold uppercase tracking-wider">{t('Try Examples')}:</span>
+                <button
+                  onClick={() => setAiPrompt("We have 5 bags of 24kg flour. A customer wants to buy 2 kilograms of flour as a Retail customer.")}
+                  className="text-[10px] bg-white border border-gray-200 text-gray-600 hover:border-brand px-2 py-1 rounded font-semibold transition"
+                >
+                  🌾 Flour 2 kg (Retail)
+                </button>
+                <button
+                  onClick={() => setAiPrompt("A customer is buying 3 loose loaves of Bread.")}
+                  className="text-[10px] bg-white border border-gray-200 text-gray-600 hover:border-brand px-2 py-1 rounded font-semibold transition"
+                >
+                  🍞 Bread 3 Loaves
+                </button>
+                <button
+                  onClick={() => setAiPrompt("A wholesaler wants 2 full sacks of flour.")}
+                  className="text-[10px] bg-white border border-gray-200 text-gray-600 hover:border-brand px-2 py-1 rounded font-semibold transition"
+                >
+                  📦 Flour 2 Sacks (Wholesale)
+                </button>
+              </div>
+
+              {aiResponse && (
+                <div className="p-3 bg-white border border-brand/10 rounded-lg space-y-2.5">
+                  <div className="text-xs font-medium text-gray-700 whitespace-pre-line leading-relaxed border-l-2 border-brand pl-2.5 font-mono">
+                    {aiResponse.explanation}
+                  </div>
+
+                  {aiResponse.success && aiResponse.actions && aiResponse.actions.length > 0 && (
+                    <div className="pt-2 border-t border-gray-100 flex flex-col sm:flex-row gap-2 items-center justify-between">
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase block">{t('Matched Actions')}</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {aiResponse.actions.map((act: any, idx: number) => (
+                            <span key={idx} className="bg-brand/5 text-brand px-2 py-0.5 rounded text-[10px] font-bold">
+                              {act.productName}: {act.qty} {act.unitType === 'sub' ? 'loose' : 'package'} ({formatMoney(act.total, settings.currency, settings.exchangeRate)})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleApplyAdjustment}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+                      >
+                        <Check className="w-3.5 h-3.5" /> {t('Apply Stock Deduction')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    };
+
     return (
       <div className="space-y-4">
+        <AIAssistantPanel />
         {/* Search & Category Filter bar */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between no-print">
           <div className="flex flex-col sm:flex-row gap-3 flex-1">
@@ -2666,8 +2896,8 @@ export default function App() {
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white font-medium text-gray-700 hover:border-gray-400 focus:border-brand cursor-pointer"
             >
               <option value="">{t('All Categories')}</option>
-              {categories.map(c => (
-                <option key={c} value={c}>{c}</option>
+              {getStoreCategories(categories, currentStoreId).map(c => (
+                <option key={c} value={c}>{cleanCategoryName(c)}</option>
               ))}
             </select>
           </div>
@@ -2713,7 +2943,7 @@ export default function App() {
               </button>
               {!isRetailer && (
                 <button
-                  onClick={() => { setEditingStockItem(null); setShowStockModal(true); }}
+                  onClick={() => { setEditingStockItem(null); setFormUseSubUnit(false); setShowStockModal(true); }}
                   className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shadow-sm"
                 >
                   <Plus className="w-4 h-4" /> {t('Add Product')}
@@ -2742,138 +2972,271 @@ export default function App() {
               </thead>
               <tbody className="divide-y divide-gray-100 font-semibold">
                 {filteredStockItems.map(p => {
-                  const globalStock = (Object.values(p.stock || {}) as number[]).reduce((a, b) => a + b, 0);
-                  const isLow = (p.stock?.[storeId] || 0) <= p.lowStockQty;
+                  const allowedStoreIds = visibleStores.map(s => s.id);
+                  const globalStock = Object.entries(p.stock || {})
+                    .filter(([sid]) => allowedStoreIds.includes(Number(sid)))
+                    .reduce((sum, [_, qty]) => sum + (Number(qty) || 0), 0);
+                  const isLow = isItemLowStock(p, p.stock?.[storeId] || 0);
+                  const isExpanded = expandedStockIds.includes(p.id);
+                  const totalCols = 10 + visibleStores.length + (!isRetailer ? 1 : 0);
+                  
                   return (
-                    <tr key={p.id} className={`hover:bg-gray-50/50 ${isLow ? 'bg-red-50/20' : ''}`}>
-                      <td className="px-4 py-3 flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center font-bold text-brand overflow-hidden border border-gray-200/65 flex-shrink-0">
-                          {p.imageUrl ? (
-                            <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          ) : (
-                            'P'
-                          )}
-                        </div>
-                        <div>
-                          <span className="font-bold text-gray-900 block">{p.name}</span>
-                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                            <span className="text-[10px] font-mono text-gray-400 uppercase">{p.code}</span>
-                            {(() => {
-                              const expiriesToRender: { storeId?: number; storeName?: string; date: string }[] = [];
-                              if (storeId) {
-                                const expD = p.expiryDates?.[storeId] || p.expiryDate;
-                                if (expD) expiriesToRender.push({ storeId, date: expD });
-                              } else {
-                                visibleStores.forEach(s => {
-                                  if ((p.stock?.[s.id] || 0) > 0) {
-                                    const expD = p.expiryDates?.[s.id] || p.expiryDate;
-                                    if (expD) {
-                                      if (!expiriesToRender.some(x => x.date === expD && x.storeId === s.id)) {
-                                        expiriesToRender.push({ storeId: s.id, storeName: s.name, date: expD });
-                                      }
-                                    }
-                                  }
-                                });
-                                if (expiriesToRender.length === 0 && p.expiryDate) {
-                                  expiriesToRender.push({ date: p.expiryDate });
-                                }
-                              }
-
-                              if (expiriesToRender.length === 0) return null;
-
-                              return expiriesToRender.map((exp, idx) => {
-                                const todayStr = new Date().toISOString().split('T')[0];
-                                const todayMs = new Date(todayStr).getTime();
-                                const expMs = new Date(exp.date).getTime();
-                                const daysRemaining = Math.ceil((expMs - todayMs) / (1000 * 60 * 60 * 24));
-                                
-                                let badgeClass = "bg-green-50 text-green-700 border-green-200";
-                                let badgeText = `${daysRemaining} ${t('days left')}`;
-                                if (daysRemaining < 0) {
-                                  badgeClass = "bg-red-50 text-red-700 border-red-200 animate-pulse font-black";
-                                  badgeText = t('EXPIRED');
-                                } else if (daysRemaining <= 7) {
-                                  badgeClass = "bg-red-50 text-red-600 border-red-100 font-extrabold";
-                                  badgeText = `${daysRemaining} ${t('days!')}`;
-                                } else if (daysRemaining <= 30) {
-                                  badgeClass = "bg-amber-50 text-amber-700 border-amber-200 font-bold";
-                                }
-                                
-                                const label = exp.storeName ? `${exp.storeName}: ${badgeText}` : badgeText;
-                                return (
-                                  <span key={idx} className={`text-[9px] px-1.5 py-0.5 rounded border ${badgeClass} flex items-center gap-0.5 whitespace-nowrap mt-1`}>
-                                    <Calendar className="w-2.5 h-2.5 text-current shrink-0" />
-                                    {label} ({exp.date})
-                                  </span>
+                    <React.Fragment key={p.id}>
+                      <tr className={`hover:bg-gray-50/50 ${isLow ? 'bg-red-50/20' : ''}`}>
+                        <td className="px-4 py-3 flex items-center gap-3">
+                          {p.useSubUnitPricing ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedStockIds(prev => 
+                                  prev.includes(p.id) ? prev.filter(id => id !== p.id) : [...prev, p.id]
                                 );
-                              });
-                            })()}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3"><span className="bg-gray-100 px-2 py-1 rounded text-gray-600 text-[10px]">{p.category}</span></td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="bg-indigo-50 text-indigo-700 font-bold px-2.5 py-0.5 rounded-full text-[10px]">
-                          {p.unit || 'Package'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center font-bold text-gray-900">{globalStock}</td>
-                      {visibleStores.map(s => {
-                        const itemStock = p.stock?.[s.id] || 0;
-                        return (
-                          <td key={s.id} className={`px-4 py-3 text-center font-bold ${itemStock <= p.lowStockQty ? 'text-amber-600' : 'text-gray-700'}`}>
-                            {itemStock}
-                          </td>
-                        );
-                      })}
-                      <td className="px-4 py-3 text-right text-gray-500">{formatMoney(p.purchasePrice, settings.currency, settings.exchangeRate)}</td>
-                      <td className="px-4 py-3 text-right text-blue-600">{formatMoney(p.retailPrice, settings.currency, settings.exchangeRate)}</td>
-                      <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, settings.currency, settings.exchangeRate)}</td>
-                      <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, settings.currency, settings.exchangeRate)}</td>
-                      <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50/20">
-                        {formatMoney(globalStock * p.purchasePrice, settings.currency, settings.exchangeRate)}
-                      </td>
-                      {!isRetailer && (
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5 justify-end">
-                            <button
-                              onClick={() => { setTransferProductId(p.id); setShowTransferModal(true); }}
-                              className="p-1 hover:bg-gray-100 rounded text-gray-500"
-                              title="Transfer Location"
+                              }}
+                              className="p-1 hover:bg-gray-100 rounded text-gray-500 transition-colors shrink-0"
+                              title={t('Show Sub-unit Breakdown')}
                             >
-                              <ArrowLeftRight className="w-3.5 h-3.5" />
+                              <ChevronDown className={`w-3.5 h-3.5 transform transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                             </button>
-                            <button
-                              onClick={() => { setEditingStockItem(p); setShowStockModal(true); }}
-                              className="p-1 hover:bg-gray-100 rounded text-blue-600"
-                              title="Modify Details"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
-                              <button
-                                onClick={() => {
-                                  setConfirmModal({
-                                    isOpen: true,
-                                    title: 'Delete Product',
-                                    description: `Are you sure you want to globally remove SKU: ${p.code} (${p.name})? This action is irreversible.`,
-                                    onConfirm: () => {
-                                      const remaining = stockItems.filter(item => item.id !== p.id);
-                                      saveAllData({ stockItems: remaining });
-                                      logAction('Deleted Product', `Globally removed SKU: ${p.code}`);
-                                    }
-                                  });
-                                }}
-                                className="p-1 hover:bg-red-50 rounded text-red-600"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                          ) : (
+                            <div className="w-[22px] shrink-0" />
+                          )}
+                          <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center font-bold text-brand overflow-hidden border border-gray-200/65 flex-shrink-0">
+                            {p.imageUrl ? (
+                              <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            ) : (
+                              'P'
                             )}
                           </div>
+                          <div>
+                            <span className="font-bold text-gray-900 block">{p.name}</span>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                              <span className="text-[10px] font-mono text-gray-400 uppercase">{p.code}</span>
+                              {(() => {
+                                const expiriesToRender: { storeId?: number; storeName?: string; date: string }[] = [];
+                                if (storeId) {
+                                  const expD = p.expiryDates?.[storeId] || p.expiryDate;
+                                  if (expD) expiriesToRender.push({ storeId, date: expD });
+                                } else {
+                                  visibleStores.forEach(s => {
+                                    if ((p.stock?.[s.id] || 0) > 0) {
+                                      const expD = p.expiryDates?.[s.id] || p.expiryDate;
+                                      if (expD) {
+                                        if (!expiriesToRender.some(x => x.date === expD && x.storeId === s.id)) {
+                                          expiriesToRender.push({ storeId: s.id, storeName: s.name, date: expD });
+                                        }
+                                      }
+                                    }
+                                  });
+                                  if (expiriesToRender.length === 0 && p.expiryDate) {
+                                    expiriesToRender.push({ date: p.expiryDate });
+                                  }
+                                }
+
+                                if (expiriesToRender.length === 0) return null;
+
+                                return expiriesToRender.map((exp, idx) => {
+                                  const todayStr = new Date().toISOString().split('T')[0];
+                                  const todayMs = new Date(todayStr).getTime();
+                                  const expMs = new Date(exp.date).getTime();
+                                  const daysRemaining = Math.ceil((expMs - todayMs) / (1000 * 60 * 60 * 24));
+                                  
+                                  let badgeClass = "bg-green-50 text-green-700 border-green-200";
+                                  let badgeText = `${daysRemaining} ${t('days left')}`;
+                                  if (daysRemaining < 0) {
+                                    badgeClass = "bg-red-50 text-red-700 border-red-200 animate-pulse font-black";
+                                    badgeText = t('EXPIRED');
+                                  } else if (daysRemaining <= 7) {
+                                    badgeClass = "bg-red-50 text-red-600 border-red-100 font-extrabold";
+                                    badgeText = `${daysRemaining} ${t('days!')}`;
+                                  } else if (daysRemaining <= 30) {
+                                    badgeClass = "bg-amber-50 text-amber-700 border-amber-200 font-bold";
+                                  }
+                                  
+                                  const label = exp.storeName ? `${exp.storeName}: ${badgeText}` : badgeText;
+                                  return (
+                                    <span key={idx} className={`text-[9px] px-1.5 py-0.5 rounded border ${badgeClass} flex items-center gap-0.5 whitespace-nowrap mt-1`}>
+                                      <Calendar className="w-2.5 h-2.5 text-current shrink-0" />
+                                      {label} ({exp.date})
+                                    </span>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          </div>
                         </td>
+                        <td className="px-4 py-3"><span className="bg-gray-100 px-2 py-1 rounded text-gray-600 text-[10px]">{p.category}</span></td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="bg-indigo-50 text-indigo-700 font-bold px-2.5 py-0.5 rounded-full text-[10px]">
+                            {p.unit || 'Package'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold text-gray-900">{formatStockQty(globalStock, p)}</td>
+                        {visibleStores.map(s => {
+                          const itemStock = p.stock?.[s.id] || 0;
+                          return (
+                            <td key={s.id} className={`px-4 py-3 text-center font-bold ${isItemLowStock(p, itemStock) ? 'text-amber-600' : 'text-gray-700'}`}>
+                              {formatStockQty(itemStock, p)}
+                            </td>
+                          );
+                        })}
+                        <td className="px-4 py-3 text-right text-gray-500">{formatMoney(p.purchasePrice, settings.currency, settings.exchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-blue-600">{formatMoney(p.retailPrice, settings.currency, settings.exchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, settings.currency, settings.exchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, settings.currency, settings.exchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50/20">
+                          {formatMoney(globalStock * p.purchasePrice, settings.currency, settings.exchangeRate)}
+                        </td>
+                        {!isRetailer && (
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5 justify-end">
+                              <button
+                                onClick={() => { setTransferProductId(p.id); setShowTransferModal(true); }}
+                                className="p-1 hover:bg-gray-100 rounded text-gray-500"
+                                title="Transfer Location"
+                              >
+                                <ArrowLeftRight className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => { setEditingStockItem(p); setFormUseSubUnit(p.useSubUnitPricing || false); setShowStockModal(true); }}
+                                className="p-1 hover:bg-gray-100 rounded text-blue-600"
+                                title="Modify Details"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
+                                <button
+                                  onClick={() => {
+                                    setConfirmModal({
+                                      isOpen: true,
+                                      title: 'Delete Product',
+                                      description: `Are you sure you want to globally remove SKU: ${p.code} (${p.name})? This action is irreversible.`,
+                                      onConfirm: () => {
+                                        const remaining = stockItems.filter(item => item.id !== p.id);
+                                        saveAllData({ stockItems: remaining });
+                                        logAction('Deleted Product', `Globally removed SKU: ${p.code}`);
+                                      }
+                                    });
+                                  }}
+                                  className="p-1 hover:bg-red-50 rounded text-red-600"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+
+                      {isExpanded && p.useSubUnitPricing && (
+                        <tr className="bg-slate-50/80">
+                          <td colSpan={totalCols} className="p-5 border-t border-b border-indigo-100">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-200/60 pb-3 mb-4">
+                              <div>
+                                <h5 className="font-bold text-gray-900 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                                  <span className="w-1.5 h-3 bg-brand rounded-full"></span>
+                                  {t('Sub-Unit Breakdown & Loose Inventory')}
+                                </h5>
+                                <p className="text-[10px] text-gray-500 font-semibold mt-0.5">
+                                  {t('Detailed loose stocks, conversion ratios, and unit pricing configuration.')}
+                                </p>
+                              </div>
+                              <div className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-[11px] font-bold text-gray-700 flex items-center gap-3 shadow-xs">
+                                <span>
+                                  {t('Packaging Conversion Ratio')}:{' '}
+                                  <span className="text-brand font-black">
+                                    1 {p.unit || 'Pkg'} = {p.subUnitConversion || 1} {p.subUnitName || 'pcs'}
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                              {/* Detailed Stock by Store */}
+                              <div className="lg:col-span-2 space-y-2">
+                                <h6 className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">{t('Warehouse Inventory Breakdown')}</h6>
+                                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+                                  <table className="w-full text-left text-[11px] border-collapse">
+                                    <thead className="bg-gray-50 text-[10px] font-bold uppercase text-gray-500 border-b">
+                                      <tr>
+                                        <th className="p-2.5 px-3">{t('Store / Warehouse')}</th>
+                                        <th className="p-2.5 px-3 text-center">{t('Formatted Stock')}</th>
+                                        <th className="p-2.5 px-3 text-center">{t('Exact Loose Count')}</th>
+                                        <th className="p-2.5 px-3 text-center">{t('Equivalent Full Packs')}</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100 font-semibold text-gray-700">
+                                      {visibleStores.map(s => {
+                                        const rawStock = p.stock?.[s.id] || 0;
+                                        const conversion = p.subUnitConversion || 1;
+                                        const fullPacks = Math.floor(rawStock / conversion);
+                                        const looseRemainder = parseFloat((rawStock % conversion).toFixed(4));
+                                        
+                                        return (
+                                          <tr key={s.id} className="hover:bg-gray-50/50">
+                                            <td className="p-2.5 px-3 text-gray-900 font-bold">{s.name}</td>
+                                            <td className="p-2.5 px-3 text-center text-indigo-700 font-black">{formatStockQty(rawStock, p)}</td>
+                                            <td className="p-2.5 px-3 text-center font-mono font-black text-gray-800">
+                                              {rawStock} <span className="text-gray-400 font-bold">{p.subUnitName || 'pcs'}</span>
+                                            </td>
+                                            <td className="p-2.5 px-3 text-center font-mono text-gray-600">
+                                              {fullPacks} {p.unit || 'Pkg'} {looseRemainder > 0 ? `+ ${looseRemainder} ${p.subUnitName || 'pcs'}` : ''}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                      <tr className="bg-slate-50 font-black text-gray-900 border-t">
+                                        <td className="p-2.5 px-3">{t('Global Summary')}</td>
+                                        <td className="p-2.5 px-3 text-center text-indigo-700">{formatStockQty(globalStock, p)}</td>
+                                        <td className="p-2.5 px-3 text-center font-mono">
+                                          {globalStock} <span className="text-gray-500">{p.subUnitName || 'pcs'}</span>
+                                        </td>
+                                        <td className="p-2.5 px-3 text-center font-mono text-gray-700">
+                                          {Math.floor(globalStock / (p.subUnitConversion || 1))} {p.unit || 'Pkg'}
+                                          {globalStock % (p.subUnitConversion || 1) > 0 ? ` + ${parseFloat((globalStock % (p.subUnitConversion || 1)).toFixed(4))} ${p.subUnitName || 'pcs'}` : ''}
+                                        </td>
+                                      </tr>
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+
+                              {/* Unit Pricing Specs Card */}
+                              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs flex flex-col justify-between">
+                                <div>
+                                  <h6 className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-3">{t('Loose Unit Price Matrix')}</h6>
+                                  <div className="space-y-2.5">
+                                    <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
+                                      <span className="text-gray-500">{t('Loose Retail Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
+                                      <span className="font-bold text-blue-600">{formatMoney(p.subUnitRetailPrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
+                                      <span className="text-gray-500">{t('Loose Wholesale Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
+                                      <span className="font-bold text-amber-600">{formatMoney(p.subUnitWholesalePrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                    </div>
+                                    {p.subUnitPartnerPrice && (
+                                      <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
+                                        <span className="text-gray-500">{t('Loose Partner Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
+                                        <span className="font-bold text-indigo-600">{formatMoney(p.subUnitPartnerPrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                      </div>
+                                    )}
+                                    <div className="flex justify-between items-center text-[11px] font-semibold py-1.5">
+                                      <span className="text-gray-500">{t('Implied Bulk Value')} ({t('calculated')})</span>
+                                      <span className="font-black text-gray-900">
+                                        {formatMoney((p.subUnitRetailPrice || 0) * (p.subUnitConversion || 1), settings.currency, settings.exchangeRate)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="bg-slate-50 border border-slate-100 p-2.5 rounded-lg text-[9px] text-slate-500 font-semibold mt-4">
+                                  💡 {t('This breakdown is live. High-velocity retail sales automatically subtract from these exact sub-unit totals.')}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
                       )}
-                    </tr>
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -3028,6 +3391,16 @@ export default function App() {
                               <span className="text-[10px] text-gray-400 italic font-medium">
                                 {t('Reconciled')}
                               </span>
+                            )}
+                            {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTransfer(transfer.id)}
+                                className="p-1 text-red-600 hover:bg-red-50 hover:text-red-700 rounded transition border border-transparent hover:border-red-100"
+                                title={t('Delete Manifest')}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             )}
                           </div>
                         </td>
@@ -3377,6 +3750,7 @@ export default function App() {
             onNavigate={(page) => setCurrentPage(page)}
           />
         );
+      case 'report-unit-velocity':
       case 'report-transaction':
       case 'report-daily':
       case 'report-monthly':
@@ -3478,8 +3852,8 @@ export default function App() {
               <div className="p-4 rounded-xl bg-white/5 border border-white/10 max-w-sm">
                 <p className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Apply for System Access</p>
                 <p className="text-xs text-white mt-1 font-semibold">Contact Founder Super Admin:</p>
-                <a href="mailto:williamnyanga747@gmail.com" className="text-brand hover:underline text-xs font-black block mt-0.5">
-                  williamnyanga747@gmail.com
+                <a href="mailto:globaltradecore@gmail.com" className="text-brand hover:underline text-xs font-black block mt-0.5">
+                  globaltradecore@gmail.com
                 </a>
               </div>
             </div>
@@ -3605,8 +3979,8 @@ export default function App() {
           </p>
           <div className="p-3 bg-white/5 rounded-xl border border-white/10 text-xs">
             <span className="text-gray-400 block mb-0.5">{t('Contact Founder for Active Assistance')}:</span>
-            <a href="mailto:williamnyanga747@gmail.com" className="text-brand font-black hover:underline">
-              williamnyanga747@gmail.com
+            <a href="mailto:globaltradecore@gmail.com" className="text-brand font-black hover:underline">
+              globaltradecore@gmail.com
             </a>
           </div>
           <button
@@ -3877,7 +4251,7 @@ export default function App() {
         stockItems={activeStockItems}
         purchaseOrders={activePurchaseOrders}
         currentStoreId={currentStoreId}
-        stores={stores}
+        stores={visibleStores}
         saveAllData={saveAllData}
         logAction={logAction}
         settings={settings}
@@ -3921,11 +4295,23 @@ export default function App() {
                   }
                 });
 
-                // Adjust rates if in TZS
-                const finalPPrice = settings.currency === 'TZS' ? pPrice / settings.exchangeRate : pPrice;
-                const finalRPrice = settings.currency === 'TZS' ? rPrice / settings.exchangeRate : rPrice;
-                const finalWPrice = settings.currency === 'TZS' ? wPrice / settings.exchangeRate : wPrice;
-                const finalPartnerPrice = settings.currency === 'TZS' ? partnerPrice / settings.exchangeRate : partnerPrice;
+                // Adjust rates if not USD (database base is USD)
+                const isUSD = settings.currency === 'USD';
+                const finalPPrice = !isUSD ? pPrice / settings.exchangeRate : pPrice;
+                const finalRPrice = !isUSD ? rPrice / settings.exchangeRate : rPrice;
+                const finalWPrice = !isUSD ? wPrice / settings.exchangeRate : wPrice;
+                const finalPartnerPrice = !isUSD ? partnerPrice / settings.exchangeRate : partnerPrice;
+
+                const useSubUnitPricing = fd.get('useSubUnitPricing') === 'on';
+                const subUnitName = fd.get('subUnitName') as string || '';
+                const subUnitConversion = parseFloat(fd.get('subUnitConversion') as string) || 1;
+                const subUnitRPriceInput = parseFloat(fd.get('subUnitRetailPrice') as string) || 0;
+                const subUnitWPriceInput = parseFloat(fd.get('subUnitWholesalePrice') as string) || 0;
+                const subUnitPPriceInput = parseFloat(fd.get('subUnitPartnerPrice') as string) || 0;
+
+                const finalSubRPrice = !isUSD ? subUnitRPriceInput / settings.exchangeRate : subUnitRPriceInput;
+                const finalSubWPrice = !isUSD ? subUnitWPriceInput / settings.exchangeRate : subUnitWPriceInput;
+                const finalSubPPrice = !isUSD ? subUnitPPriceInput / settings.exchangeRate : subUnitPPriceInput;
 
                 if (editingStockItem) {
                   const updated = stockItems.map(p => {
@@ -3934,7 +4320,13 @@ export default function App() {
                         ...p, name, code, category: cat, unit,
                         purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                         lowStockQty: lowLimit, imageUrl, expiryDate: expiryDate || undefined,
-                        expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
+                        expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined,
+                        useSubUnitPricing,
+                        subUnitName,
+                        subUnitConversion,
+                        subUnitRetailPrice: finalSubRPrice,
+                        subUnitWholesalePrice: finalSubWPrice,
+                        subUnitPartnerPrice: finalSubPPrice
                       };
                     }
                     return p;
@@ -3953,7 +4345,13 @@ export default function App() {
                     purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                     lowStockQty: lowLimit, imageUrl,
                     expiryDate: expiryDate || undefined,
-                    expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined
+                    expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined,
+                    useSubUnitPricing,
+                    subUnitName,
+                    subUnitConversion,
+                    subUnitRetailPrice: finalSubRPrice,
+                    subUnitWholesalePrice: finalSubWPrice,
+                    subUnitPartnerPrice: finalSubPPrice
                   };
                   saveAllData({ stockItems: [...stockItems, newProduct] });
                   logAction('Created Product', `Registered new inventory SKU: ${code}`);
@@ -4023,11 +4421,11 @@ export default function App() {
                 <label className="text-xs font-semibold text-gray-700">Category</label>
                 <select
                   name="category"
-                  defaultValue={editingStockItem?.category || categories[0]}
+                  defaultValue={editingStockItem?.category || getStoreCategories(categories, currentStoreId)[0] || categories[0]}
                   className="w-full px-3 py-2 border rounded-lg text-sm bg-white"
                 >
-                  {categories.map(c => (
-                    <option key={c} value={c}>{c}</option>
+                  {getStoreCategories(categories, currentStoreId).map(c => (
+                    <option key={c} value={c}>{cleanCategoryName(c)}</option>
                   ))}
                 </select>
               </div>
@@ -4051,7 +4449,7 @@ export default function App() {
                     step="any"
                     name="purchasePrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency === 'TZS' ? editingStockItem.purchasePrice * settings.exchangeRate : editingStockItem.purchasePrice) : ''}
+                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.purchasePrice * settings.exchangeRate : editingStockItem.purchasePrice) : ''}
                     className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
@@ -4074,7 +4472,7 @@ export default function App() {
                     step="any"
                     name="retailPrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency === 'TZS' ? editingStockItem.retailPrice * settings.exchangeRate : editingStockItem.retailPrice) : ''}
+                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.retailPrice * settings.exchangeRate : editingStockItem.retailPrice) : ''}
                     className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
@@ -4085,7 +4483,7 @@ export default function App() {
                     step="any"
                     name="wholesalePrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency === 'TZS' ? editingStockItem.wholesalePrice * settings.exchangeRate : editingStockItem.wholesalePrice) : ''}
+                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.wholesalePrice * settings.exchangeRate : editingStockItem.wholesalePrice) : ''}
                     className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
@@ -4096,10 +4494,89 @@ export default function App() {
                     step="any"
                     name="partnerPrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency === 'TZS' ? (editingStockItem.partnerPrice || editingStockItem.retailPrice) * settings.exchangeRate : (editingStockItem.partnerPrice || editingStockItem.retailPrice)) : ''}
+                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? (editingStockItem.partnerPrice || editingStockItem.retailPrice) * settings.exchangeRate : (editingStockItem.partnerPrice || editingStockItem.retailPrice)) : ''}
                     className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Fractional Sub-Unit Pricing Section */}
+              <div className="border border-brand/20 bg-brand/5 rounded-xl p-3 space-y-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    name="useSubUnitPricing"
+                    checked={formUseSubUnit}
+                    onChange={(e) => setFormUseSubUnit(e.target.checked)}
+                    className="w-4 h-4 text-brand rounded border-gray-300 focus:ring-brand animate-none"
+                  />
+                  <span className="text-xs font-bold text-gray-800">Enable Fractional & Sub-Unit Pricing</span>
+                </label>
+
+                {formUseSubUnit && (
+                  <div className="space-y-3 pt-2 border-t border-brand/10">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub-Unit Name</label>
+                        <input
+                          type="text"
+                          name="subUnitName"
+                          placeholder="e.g. Gram, Piece, ml, KG"
+                          defaultValue={editingStockItem?.subUnitName || ''}
+                          required={formUseSubUnit}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Conversion Factor (Qty in Main Unit)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          name="subUnitConversion"
+                          placeholder="e.g. 1000 for Kg to gram, 12 for Box"
+                          defaultValue={editingStockItem?.subUnitConversion || ''}
+                          required={formUseSubUnit}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Retail Price</label>
+                        <input
+                          type="number"
+                          step="any"
+                          name="subUnitRetailPrice"
+                          defaultValue={editingStockItem && editingStockItem.subUnitRetailPrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitRetailPrice * settings.exchangeRate : editingStockItem.subUnitRetailPrice) : ''}
+                          required={formUseSubUnit}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Wholesale Price</label>
+                        <input
+                          type="number"
+                          step="any"
+                          name="subUnitWholesalePrice"
+                          defaultValue={editingStockItem && editingStockItem.subUnitWholesalePrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitWholesalePrice * settings.exchangeRate : editingStockItem.subUnitWholesalePrice) : ''}
+                          required={formUseSubUnit}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Partner Price</label>
+                        <input
+                          type="number"
+                          step="any"
+                          name="subUnitPartnerPrice"
+                          defaultValue={editingStockItem && editingStockItem.subUnitPartnerPrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitPartnerPrice * settings.exchangeRate : editingStockItem.subUnitPartnerPrice) : ''}
+                          required={formUseSubUnit}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-700">Default Expiry Date (Optional)</label>
@@ -4182,7 +4659,10 @@ export default function App() {
                 const item = stockItems.find(p => p.id === pid);
                 if (!item) return;
 
-                if ((item.stock?.[fromStore] || 0) < qty) {
+                const transferConversion = item.useSubUnitPricing ? (item.subUnitConversion || 1) : 1;
+                const requiredBaseUnits = qty * transferConversion;
+
+                if ((item.stock?.[fromStore] || 0) < requiredBaseUnits) {
                   toast.error(t('Insufficient stock weights in the source store.'));
                   return;
                 }
