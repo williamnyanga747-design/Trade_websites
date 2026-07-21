@@ -52,6 +52,18 @@ export default function Receipts({
   const canSetupReceipt = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin' || currentUser?.role === 'Store Admin';
   const [activeTab, setActiveTab] = useState<'selling' | 'buying'>('selling');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Date and Store filter controls
+  const [filterStoreId, setFilterStoreId] = useState<string>('all');
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+
+  useEffect(() => {
+    if (currentStoreId) {
+      setFilterStoreId(String(currentStoreId));
+    }
+  }, [currentStoreId]);
+
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -319,23 +331,36 @@ export default function Receipts({
 
   // Filters
   const filteredSales = salesOrders.filter(so => {
-    const matchStore = currentStoreId ? so.storeId === currentStoreId : true;
+    const activeStoreId = filterStoreId !== 'all' ? parseInt(filterStoreId) : null;
+    const matchStore = activeStoreId ? so.storeId === activeStoreId : true;
+    
+    const matchStartDate = filterStartDate ? so.date >= filterStartDate : true;
+    const matchEndDate = filterEndDate ? so.date <= filterEndDate : true;
+
     const custName = getCustomerName(so.customerId).toLowerCase();
     const matchSearch = searchQuery
       ? so.soNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
         custName.includes(searchQuery.toLowerCase())
       : true;
-    return matchStore && matchSearch;
+    return matchStore && matchStartDate && matchEndDate && matchSearch;
   });
 
   const filteredPurchases = purchaseOrders.filter(po => {
-    const matchStore = currentStoreId ? po.storeId === currentStoreId : true;
+    // Exclude soft-deleted purchase orders
+    if (po.isDeleted) return false;
+
+    const activeStoreId = filterStoreId !== 'all' ? parseInt(filterStoreId) : null;
+    const matchStore = activeStoreId ? po.storeId === activeStoreId : true;
+
+    const matchStartDate = filterStartDate ? po.date >= filterStartDate : true;
+    const matchEndDate = filterEndDate ? po.date <= filterEndDate : true;
+
     const suppName = getSupplierName(po.supplierId).toLowerCase();
     const matchSearch = searchQuery
       ? po.poNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
         suppName.includes(searchQuery.toLowerCase())
       : true;
-    return matchStore && matchSearch;
+    return matchStore && matchStartDate && matchEndDate && matchSearch;
   });
 
   // EXPORT RECEIPT DIRECTLY TO EXCEL (.XLS)
@@ -471,20 +496,75 @@ export default function Receipts({
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center justify-between no-print">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder={activeTab === 'selling' ? `${translate('Search invoice # or Customer...') || 'Search invoice #...'}` : `${translate('Search receipt # or Supplier...') || 'Search receipt #...'}`}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 outline-none"
-          />
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col md:flex-row gap-4 items-center justify-between no-print">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 w-full">
+          {/* Search */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder={activeTab === 'selling' ? `${translate('Search invoice # or Customer...') || 'Search invoice #...'}` : `${translate('Search receipt # or Supplier...') || 'Search receipt #...'}`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 outline-none animate-none"
+            />
+          </div>
+
+          {/* Store Selector */}
+          <div>
+            <select
+              value={filterStoreId}
+              disabled={!!currentStoreId}
+              onChange={(e) => setFilterStoreId(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-brand/20 disabled:opacity-75"
+            >
+              <option value="all">📁 {translate('All Stores') || 'All Stores'}</option>
+              {stores.filter(s => !s.isDeleted).map(s => (
+                <option key={s.id} value={s.id}>🏪 {s.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-gray-400 uppercase whitespace-nowrap">{translate('From') || 'From'}</span>
+            <input
+              type="date"
+              value={filterStartDate}
+              onChange={(e) => setFilterStartDate(e.target.value)}
+              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold outline-none focus:ring-2 focus:ring-brand/20"
+            />
+          </div>
+
+          {/* End Date */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-gray-400 uppercase whitespace-nowrap">{translate('To') || 'To'}</span>
+            <input
+              type="date"
+              value={filterEndDate}
+              onChange={(e) => setFilterEndDate(e.target.value)}
+              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold outline-none focus:ring-2 focus:ring-brand/20"
+            />
+          </div>
         </div>
-        <span className="text-xs font-semibold text-gray-400">
-          {translate('Showing')} {activeTab === 'selling' ? filteredSales.length : filteredPurchases.length} {translate('documents') || 'documents'}
-        </span>
+
+        <div className="flex items-center justify-between w-full md:w-auto md:justify-end gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-gray-100 whitespace-nowrap">
+          <span className="text-xs font-semibold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg">
+            {translate('Showing')} <strong>{activeTab === 'selling' ? filteredSales.length : filteredPurchases.length}</strong> {translate('documents') || 'documents'}
+          </span>
+          {(filterStartDate || filterEndDate || (filterStoreId !== 'all' && !currentStoreId)) && (
+            <button
+              onClick={() => {
+                setFilterStartDate('');
+                setFilterEndDate('');
+                if (!currentStoreId) setFilterStoreId('all');
+              }}
+              className="text-xs text-red-600 font-bold hover:underline"
+            >
+              {translate('Clear') || 'Clear'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main receipts table */}
@@ -528,6 +608,18 @@ export default function Receipts({
                         ) : (
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700">
                             {translate('Completed')}
+                          </span>
+                        )}
+                        {so.paymentMethod && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700">
+                            📱 {so.paymentMethod}
+                          </span>
+                        )}
+                        {so.paymentStatus && (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            so.paymentStatus === 'Paid' ? 'bg-emerald-100 text-emerald-800' : (so.paymentStatus === 'Credit' ? 'bg-rose-100 text-rose-800' : 'bg-yellow-100 text-yellow-800')
+                          }`}>
+                            {so.paymentStatus}
                           </span>
                         )}
                       </td>
@@ -621,11 +713,11 @@ export default function Receipts({
                                   setConfirmModal({
                                     isOpen: true,
                                     title: translate('Delete Purchase Receipt'),
-                                    description: translate('Are you sure you want to completely delete this purchase receipt? This action is irreversible.'),
+                                    description: translate('Are you sure you want to delete this purchase receipt? You can restore it later from the Data Recovery Hub.'),
                                     onConfirm: () => {
-                                      const updated = purchaseOrders.filter(item => item.id !== po.id);
+                                      const updated = purchaseOrders.map(item => item.id === po.id ? { ...item, isDeleted: true } : item);
                                       onUpdatePurchaseOrders?.(updated);
-                                      logAction?.('Deleted Purchase Receipt', `Completely deleted purchase receipt: ${po.poNumber}`);
+                                      logAction?.('Deleted Purchase Receipt (Soft)', `Soft-deleted purchase receipt: ${po.poNumber}`);
                                     }
                                   });
                               }}

@@ -28,12 +28,17 @@ try {
 
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-    const dbSettings = {
+    const dbSettings: any = {
       experimentalForceLongPolling: true,
-      localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager()
-      })
     };
+
+    // Only enable persistent local cache if we are NOT in an iframe (to prevent "failed to obtain primary lease" in development sandboxes)
+    const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+    if (!isIframe) {
+      dbSettings.localCache = persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+      });
+    }
 
     db = config.firestoreDatabaseId 
       ? initializeFirestore(app, dbSettings, config.firestoreDatabaseId)

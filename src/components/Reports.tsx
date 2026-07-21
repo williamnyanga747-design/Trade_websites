@@ -47,8 +47,28 @@ export default function Reports({
   const startDefault = new Date();
   startDefault.setDate(endDefault.getDate() - 30);
 
-  const [txStartDate, setTxStartDate] = useState(startDefault.toISOString().split('T')[0]);
-  const [txEndDate, setTxEndDate] = useState(endDefault.toISOString().split('T')[0]);
+  const [txStartDate, setTxStartDateState] = useState(() => {
+    const saved = localStorage.getItem('reports_tx_start_date');
+    if (saved) return saved;
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [txEndDate, setTxEndDateState] = useState(() => {
+    const saved = localStorage.getItem('reports_tx_end_date');
+    if (saved) return saved;
+    return new Date().toISOString().split('T')[0];
+  });
+
+  const setTxStartDate = (val: string) => {
+    setTxStartDateState(val);
+    localStorage.setItem('reports_tx_start_date', val);
+  };
+
+  const setTxEndDate = (val: string) => {
+    setTxEndDateState(val);
+    localStorage.setItem('reports_tx_end_date', val);
+  };
 
   // Month state for Monthly report
   const [selectedMonth, setSelectedMonth] = useState(todayStr.substring(0, 7));
@@ -172,26 +192,53 @@ export default function Reports({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex items-center justify-between">
-            <div>
-              <div className="text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">{t('Total Sales (Period)')}</div>
-              <div className="text-2xl font-black text-emerald-700">{fmt(totalSalesVal)}</div>
-              <div className="text-[10px] text-emerald-600 font-semibold mt-1">From {sales.length} transactions</div>
+        {/* Sales & Profitability Section */}
+        <div className="space-y-2">
+          <div className="text-[11px] font-black text-gray-400 uppercase tracking-widest">{t('Sales & Profitability')}</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-1">{t('Total Sales (Period)')}</div>
+                <div className="text-2xl font-black text-emerald-700">{fmt(totalSalesVal)}</div>
+                <div className="text-[10px] text-emerald-600 font-semibold mt-1">From {sales.length} transactions</div>
+              </div>
+            </div>
+            <div className="p-4 bg-blue-50 rounded-xl border border-blue-100 flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-black text-blue-800 uppercase tracking-wider mb-1">{t('Total COGS (Cost of Sold Items)')}</div>
+                <div className="text-2xl font-black text-blue-700">{fmt(totalSalesVal - totalProfitVal)}</div>
+                <div className="text-[10px] text-blue-600 font-semibold mt-1">Cost of items actually sold</div>
+              </div>
+            </div>
+            <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-[10px] font-black text-indigo-800 uppercase tracking-wider">{t('Gross Profit (From Sales)')}</span>
+                  <div className="group relative cursor-help text-indigo-600 hover:text-indigo-800 inline-flex items-center">
+                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-indigo-300 text-[10px] font-serif font-black">i</span>
+                    <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-64 p-3 bg-slate-800 text-white text-[11px] leading-snug rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 font-medium shadow-lg">
+                      {t('Purchases add to inventory assets. Profit is calculated as Sales minus Cost of Goods Sold (COGS) for items actually sold.')}
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-800"></div>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-2xl font-black text-indigo-700">{fmt(totalProfitVal)}</div>
+                <div className="text-[10px] text-indigo-600 font-semibold mt-1">{t('Based on COGS (Cost of Goods Sold), not total stock purchases.')}</div>
+              </div>
             </div>
           </div>
-          <div className="p-4 bg-purple-50 rounded-xl border border-purple-100 flex items-center justify-between">
-            <div>
-              <div className="text-[10px] font-black text-purple-800 uppercase tracking-wider mb-1">{t('Total Purchases (Period)')}</div>
-              <div className="text-2xl font-black text-purple-700">{fmt(totalPurchasesVal)}</div>
-              <div className="text-[10px] text-purple-600 font-semibold mt-1">From {purchases.length} invoices</div>
-            </div>
-          </div>
-          <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center justify-between">
-            <div>
-              <div className="text-[10px] font-black text-indigo-800 uppercase tracking-wider mb-1">{t('Net Period Profit')}</div>
-              <div className="text-2xl font-black text-indigo-700">{fmt(totalProfitVal)}</div>
-              <div className="text-[10px] text-indigo-600 font-semibold mt-1">Calculated Margin</div>
+        </div>
+
+        {/* Inventory / Stock Movement Section */}
+        <div className="space-y-2">
+          <div className="text-[11px] font-black text-gray-400 uppercase tracking-widest">{t('Inventory / Stock Movement')}</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 bg-purple-50 rounded-xl border border-purple-100 flex items-center justify-between col-span-1">
+              <div>
+                <div className="text-[10px] font-black text-purple-800 uppercase tracking-wider mb-1">{t('New Stock Additions (Purchases)')}</div>
+                <div className="text-2xl font-black text-purple-700">{fmt(totalPurchasesVal)}</div>
+                <div className="text-[10px] text-purple-600 font-semibold mt-1">From {purchases.length} invoices (Increases assets)</div>
+              </div>
             </div>
           </div>
         </div>

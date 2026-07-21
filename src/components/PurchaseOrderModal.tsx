@@ -45,12 +45,23 @@ export default function PurchaseOrderModal({
   const [selectedSupplierId, setSelectedSupplierId] = useState<number>(activeSuppliersForStore[0]?.id || 1);
 
   React.useEffect(() => {
+    if (isOpen) {
+      setSelectedStoreId(currentStoreId || activeStores[0]?.id || 1);
+      setPoItems([]);
+      setSearchQuery('');
+      setErrorMsg(null);
+      setReceiveImmediately(false);
+    }
+  }, [isOpen, currentStoreId]);
+
+  React.useEffect(() => {
     if (activeSuppliersForStore.length > 0 && !activeSuppliersForStore.some(s => s.id === selectedSupplierId)) {
       setSelectedSupplierId(activeSuppliersForStore[0].id);
     }
   }, [activeSuppliersForStore, selectedSupplierId]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [poItems, setPoItems] = useState<{ productId: number; qty: number; cost: number }[]>([]);
+  const [poItems, setPoItems] = useState<{ productId: number; qty: number; cost: number; discount?: number; unitType?: 'main' | 'sub'; subUnitName?: string }[]>([]);
+  const [paymentTerms, setPaymentTerms] = useState<string>('Paid in Full');
   const [receiveImmediately, setReceiveImmediately] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -71,7 +82,7 @@ export default function PurchaseOrderModal({
   // Add Item to PO
   const handleAddItem = (item: StockItem) => {
     setErrorMsg(null);
-    const existingIndex = poItems.findIndex(p => p.productId === item.id);
+    const existingIndex = poItems.findIndex(p => p.productId === item.id && (p.unitType || 'main') === 'main');
 
     if (existingIndex > -1) {
       const updated = [...poItems];
@@ -83,20 +94,47 @@ export default function PurchaseOrderModal({
         {
           productId: item.id,
           qty: 50, // Default batch size
-          cost: item.purchasePrice
+          cost: item.purchasePrice,
+          discount: 0,
+          unitType: 'main',
+          subUnitName: item.subUnitName
         }
       ]);
     }
   };
 
+  // Toggle unitType
+  const handleUpdateUnitType = (productId: number, currentUnitType: 'main' | 'sub', newUnitType: 'main' | 'sub') => {
+    const item = stockItems.find(p => p.id === productId);
+    if (!item) return;
+
+    setPoItems(poItems.map(p => {
+      if (p.productId === productId && (p.unitType || 'main') === currentUnitType) {
+        let nextCost = p.cost;
+        if (newUnitType === 'sub') {
+          // If changing to sub-unit, divide purchasePrice by conversion
+          nextCost = item.purchasePrice / (item.subUnitConversion || 1);
+        } else {
+          nextCost = item.purchasePrice;
+        }
+        return {
+          ...p,
+          unitType: newUnitType,
+          cost: nextCost
+        };
+      }
+      return p;
+    }));
+  };
+
   // Update PO line Qty
-  const handleUpdateQty = (productId: number, qty: number) => {
+  const handleUpdateQty = (productId: number, unitType: 'main' | 'sub', qty: number) => {
     if (qty <= 0) {
-      handleRemoveItem(productId);
+      handleRemoveItem(productId, unitType);
       return;
     }
     setPoItems(poItems.map(p => {
-      if (p.productId === productId) {
+      if (p.productId === productId && (p.unitType || 'main') === unitType) {
         return { ...p, qty };
       }
       return p;
@@ -104,24 +142,35 @@ export default function PurchaseOrderModal({
   };
 
   // Update PO line Cost Price
-  const handleUpdateCost = (productId: number, cost: number) => {
+  const handleUpdateCost = (productId: number, unitType: 'main' | 'sub', cost: number) => {
     if (cost < 0) return;
     setPoItems(poItems.map(p => {
-      if (p.productId === productId) {
+      if (p.productId === productId && (p.unitType || 'main') === unitType) {
         return { ...p, cost };
       }
       return p;
     }));
   };
 
+  // Update PO line Discount
+  const handleUpdateDiscount = (productId: number, unitType: 'main' | 'sub', discount: number) => {
+    if (discount < 0) return;
+    setPoItems(poItems.map(p => {
+      if (p.productId === productId && (p.unitType || 'main') === unitType) {
+        return { ...p, discount };
+      }
+      return p;
+    }));
+  };
+
   // Remove item from PO
-  const handleRemoveItem = (productId: number) => {
-    setPoItems(poItems.filter(p => p.productId !== productId));
+  const handleRemoveItem = (productId: number, unitType: 'main' | 'sub' = 'main') => {
+    setPoItems(poItems.filter(p => !(p.productId === productId && (p.unitType || 'main') === unitType)));
   };
 
   // Grand Total calculation
   const grandTotal = useMemo(() => {
-    return poItems.reduce((sum, item) => sum + (item.cost * item.qty), 0);
+    return poItems.reduce((sum, item) => sum + ((item.cost - (item.discount || 0)) * item.qty), 0);
   }, [poItems]);
 
   // Submit purchase order
@@ -144,19 +193,28 @@ export default function PurchaseOrderModal({
       items: poItems.map(p => ({
         productId: p.productId,
         qty: p.qty,
-        cost: p.cost
+        cost: p.cost,
+        discount: p.discount || 0,
+        unitType: p.unitType || 'main',
+        subUnitName: p.unitType === 'sub' ? p.subUnitName : undefined
       })),
-      total: grandTotal
+      total: grandTotal,
+      paymentTerms
     };
 
     let updatedStockItems = [...stockItems];
     if (receiveImmediately) {
-      // Add items immediately to store inventory
+      // Add items immediately to store inventory, taking conversion into account
       updatedStockItems = stockItems.map(p => {
-        const poItem = poItems.find(item => item.productId === p.id);
-        if (poItem) {
+        const matchingPOItems = poItems.filter(item => item.productId === p.id);
+        if (matchingPOItems.length > 0) {
           const nextStockObj = { ...p.stock };
-          nextStockObj[selectedStoreId] = (nextStockObj[selectedStoreId] || 0) + poItem.qty;
+          let totalAddedBaseUnits = 0;
+          matchingPOItems.forEach(poItem => {
+            const conversion = (poItem.unitType || 'main') === 'main' && p.useSubUnitPricing ? (p.subUnitConversion || 1) : 1;
+            totalAddedBaseUnits += poItem.qty * conversion;
+          });
+          nextStockObj[selectedStoreId] = (nextStockObj[selectedStoreId] || 0) + totalAddedBaseUnits;
           return { ...p, stock: nextStockObj };
         }
         return p;
@@ -298,6 +356,20 @@ export default function PurchaseOrderModal({
                 </div>
               </div>
 
+              {/* Payment Terms Selector */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-500 uppercase">{t('Payment Terms')}</label>
+                <select
+                  value={paymentTerms}
+                  onChange={(e) => setPaymentTerms(e.target.value)}
+                  className="w-full px-2.5 py-1.5 border rounded-lg text-xs bg-white font-semibold outline-none"
+                >
+                  <option value="Paid in Full">{t('Paid in Full')}</option>
+                  <option value="Credit / On Account">{t('Credit / On Account')}</option>
+                  <option value="Partial Deposit">{t('Partial Deposit')}</option>
+                </select>
+              </div>
+
               {/* Instant Stock Receipt Toggle Option */}
               <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -323,40 +395,76 @@ export default function PurchaseOrderModal({
                   const product = stockItems.find(item => item.id === p.productId);
                   if (!product) return null;
 
+                  const unitType = p.unitType || 'main';
+                  const unitLabel = unitType === 'sub' ? (product.subUnitName || t('pcs')) : (product.unit || t('Package'));
+
                   return (
-                    <div key={p.productId} className="bg-white border rounded-xl p-3 space-y-2.5">
+                    <div key={`${p.productId}-${unitType}`} className="bg-white border rounded-xl p-3 space-y-2.5">
                       <div className="flex justify-between items-start gap-1">
                         <div>
                           <span className="font-bold text-gray-900 text-xs block">{product.name}</span>
-                          <span className="text-[9px] text-gray-400 font-bold block uppercase">{product.category}</span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[9px] text-gray-400 font-bold uppercase">{product.category}</span>
+                            <span className="text-[9px] bg-brand/10 text-brand px-1.5 py-0.5 rounded font-bold uppercase">
+                              {unitLabel}
+                            </span>
+                          </div>
+
+                          {/* Unit Selection Toggle */}
+                          {product.useSubUnitPricing && (
+                            <div className="flex gap-1 mt-2 bg-gray-100 p-0.5 rounded-lg w-fit">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateUnitType(p.productId, unitType, 'main')}
+                                className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase transition-all ${
+                                  unitType === 'main'
+                                    ? 'bg-brand text-white shadow-xs'
+                                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200'
+                                }`}
+                              >
+                                📦 {product.unit || t('Bulk')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateUnitType(p.productId, unitType, 'sub')}
+                                className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase transition-all ${
+                                  unitType === 'sub'
+                                    ? 'bg-brand text-white shadow-xs'
+                                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200'
+                                }`}
+                              >
+                                ⚖️ {product.subUnitName || t('Sub-unit')}
+                              </button>
+                            </div>
+                          )}
                         </div>
                         <button
-                          onClick={() => handleRemoveItem(p.productId)}
-                          className="text-gray-400 hover:text-brand"
+                          onClick={() => handleRemoveItem(p.productId, unitType)}
+                          className="text-gray-400 hover:text-brand p-1 rounded-lg hover:bg-red-50 transition"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 pt-2 border-t">
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t">
                         <div className="space-y-1">
                           <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Quantity')}</label>
                           <div className="flex items-center border rounded-lg">
                             <button
-                              onClick={() => handleUpdateQty(p.productId, p.qty - 10)}
-                              className="px-2 py-1 bg-gray-50 hover:bg-gray-100 border-r text-gray-600 font-bold"
+                              onClick={() => handleUpdateQty(p.productId, unitType, p.qty - 10)}
+                              className="px-1.5 py-1 bg-gray-50 hover:bg-gray-100 border-r text-gray-600 font-bold"
                             >
                               -
                             </button>
                             <input
                               type="number"
                               value={p.qty}
-                              onChange={(e) => handleUpdateQty(p.productId, parseInt(e.target.value) || 0)}
+                              onChange={(e) => handleUpdateQty(p.productId, unitType, parseInt(e.target.value) || 0)}
                               className="w-full text-center text-xs font-bold font-mono outline-none py-1 bg-transparent"
                             />
                             <button
-                              onClick={() => handleUpdateQty(p.productId, p.qty + 10)}
-                              className="px-2 py-1 bg-gray-50 hover:bg-gray-100 border-l text-gray-600 font-bold"
+                              onClick={() => handleUpdateQty(p.productId, unitType, p.qty + 10)}
+                              className="px-1.5 py-1 bg-gray-50 hover:bg-gray-100 border-l text-gray-600 font-bold"
                             >
                               +
                             </button>
@@ -372,15 +480,30 @@ export default function PurchaseOrderModal({
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
                               const normalizedVal = settings.currency === 'TZS' ? val / settings.exchangeRate : val;
-                              handleUpdateCost(p.productId, normalizedVal);
+                              handleUpdateCost(p.productId, unitType, normalizedVal);
                             }}
-                            className="w-full border rounded-lg px-2.5 py-1 text-xs font-bold font-mono text-gray-900 outline-none focus:border-brand"
+                            className="w-full border rounded-lg px-2 py-1 text-xs font-bold font-mono text-gray-900 outline-none focus:border-brand"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Unit Disc')} ({settings.currency})</label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={settings.currency === 'TZS' ? Math.round((p.discount || 0) * settings.exchangeRate) : (p.discount || 0)}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              const normalizedVal = settings.currency === 'TZS' ? val / settings.exchangeRate : val;
+                              handleUpdateDiscount(p.productId, unitType, normalizedVal);
+                            }}
+                            className="w-full border rounded-lg px-2 py-1 text-xs font-bold font-mono text-gray-900 outline-none focus:border-brand"
                           />
                         </div>
                       </div>
 
                       <div className="text-right text-[10px] text-gray-400 font-bold">
-                        {t('Line Total')}: <span className="text-gray-900 font-extrabold">{formatMoney(p.cost * p.qty, settings.currency, settings.exchangeRate)}</span>
+                        {t('Line Total')}: <span className="text-gray-900 font-extrabold">{formatMoney((p.cost - (p.discount || 0)) * p.qty, settings.currency, settings.exchangeRate)}</span>
                       </div>
                     </div>
                   );

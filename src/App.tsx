@@ -196,6 +196,25 @@ export default function App() {
   }, []);
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('theme', theme);
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch {}
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+  };
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem('tradecore_sidebar_collapsed') === 'true';
@@ -230,6 +249,112 @@ export default function App() {
   const [transferFilter, setTransferFilter] = useState<'All' | 'Pending' | 'In-Transit' | 'Completed' | 'Rejected'>('All');
   const [currencySandboxAmount, setCurrencySandboxAmount] = useState<string>('1');
   const [localExchangeRateStr, setLocalExchangeRateStr] = useState<string>('');
+
+  // Pricing & sub-unit calculation state variables
+  const [formPurchasePrice, setFormPurchasePrice] = useState<string>('');
+  const [formRetailPrice, setFormRetailPrice] = useState<string>('');
+  const [formWholesalePrice, setFormWholesalePrice] = useState<string>('');
+  const [formPartnerPrice, setFormPartnerPrice] = useState<string>('');
+  const [formConversionFactor, setFormConversionFactor] = useState<string>('');
+  const [formSubRetailPrice, setFormSubRetailPrice] = useState<string>('');
+  const [formSubWholesalePrice, setFormSubWholesalePrice] = useState<string>('');
+  const [formSubPartnerPrice, setFormSubPartnerPrice] = useState<string>('');
+
+  useEffect(() => {
+    if (showStockModal) {
+      const isUSD = settings.currency === 'USD';
+      const multiplier = isUSD ? 1 : settings.exchangeRate;
+      
+      if (editingStockItem) {
+        setFormPurchasePrice(String(editingStockItem.purchasePrice * multiplier));
+        setFormRetailPrice(String(editingStockItem.retailPrice * multiplier));
+        setFormWholesalePrice(String(editingStockItem.wholesalePrice * multiplier));
+        setFormPartnerPrice(String((editingStockItem.partnerPrice || editingStockItem.retailPrice) * multiplier));
+        setFormConversionFactor(editingStockItem.subUnitConversion ? String(editingStockItem.subUnitConversion) : '');
+        setFormSubRetailPrice(editingStockItem.subUnitRetailPrice !== undefined ? String(editingStockItem.subUnitRetailPrice * multiplier) : '');
+        setFormSubWholesalePrice(editingStockItem.subUnitWholesalePrice !== undefined ? String(editingStockItem.subUnitWholesalePrice * multiplier) : '');
+        setFormSubPartnerPrice(editingStockItem.subUnitPartnerPrice !== undefined ? String(editingStockItem.subUnitPartnerPrice * multiplier) : '');
+      } else {
+        setFormPurchasePrice('');
+        setFormRetailPrice('');
+        setFormWholesalePrice('');
+        setFormPartnerPrice('');
+        setFormConversionFactor('');
+        setFormSubRetailPrice('');
+        setFormSubWholesalePrice('');
+        setFormSubPartnerPrice('');
+      }
+    }
+  }, [showStockModal, editingStockItem, settings.currency, settings.exchangeRate]);
+
+  const handleMainPriceChange = (field: 'purchase' | 'retail' | 'wholesale' | 'partner', value: string) => {
+    if (field === 'purchase') setFormPurchasePrice(value);
+    if (field === 'retail') {
+      setFormRetailPrice(value);
+      const conversion = parseFloat(formConversionFactor);
+      const valNum = parseFloat(value);
+      if (conversion > 0 && !isNaN(valNum)) {
+        setFormSubRetailPrice((valNum / conversion).toFixed(2));
+      }
+    }
+    if (field === 'wholesale') {
+      setFormWholesalePrice(value);
+      const conversion = parseFloat(formConversionFactor);
+      const valNum = parseFloat(value);
+      if (conversion > 0 && !isNaN(valNum)) {
+        setFormSubWholesalePrice((valNum / conversion).toFixed(2));
+      }
+    }
+    if (field === 'partner') {
+      setFormPartnerPrice(value);
+      const conversion = parseFloat(formConversionFactor);
+      const valNum = parseFloat(value);
+      if (conversion > 0 && !isNaN(valNum)) {
+        setFormSubPartnerPrice((valNum / conversion).toFixed(2));
+      }
+    }
+  };
+
+  const handleConversionChange = (value: string) => {
+    setFormConversionFactor(value);
+    const conversion = parseFloat(value);
+    if (conversion > 0) {
+      const rVal = parseFloat(formRetailPrice);
+      if (!isNaN(rVal)) setFormSubRetailPrice((rVal / conversion).toFixed(2));
+      const wVal = parseFloat(formWholesalePrice);
+      if (!isNaN(wVal)) setFormSubWholesalePrice((wVal / conversion).toFixed(2));
+      const pVal = parseFloat(formPartnerPrice);
+      if (!isNaN(pVal)) setFormSubPartnerPrice((pVal / conversion).toFixed(2));
+    }
+  };
+
+  const getMarginText = (sellingPriceStr: string, purchasePriceStr: string) => {
+    const sp = parseFloat(sellingPriceStr);
+    const pp = parseFloat(purchasePriceStr);
+    if (isNaN(sp) || isNaN(pp) || sp <= 0) return null;
+    const margin = ((sp - pp) / sp) * 100;
+    const isNegative = margin < 0;
+    return (
+      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-1.5 ${isNegative ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+        {margin > 0 ? '+' : ''}{margin.toFixed(1)}% {t('margin')}
+      </span>
+    );
+  };
+
+  const getSubMarginText = (subSellingPriceStr: string, purchasePriceStr: string, conversionStr: string) => {
+    const ssp = parseFloat(subSellingPriceStr);
+    const pp = parseFloat(purchasePriceStr);
+    const conv = parseFloat(conversionStr);
+    if (isNaN(ssp) || isNaN(pp) || isNaN(conv) || conv <= 0 || ssp <= 0) return null;
+    const subPP = pp / conv;
+    const margin = ((ssp - subPP) / ssp) * 100;
+    const isNegative = margin < 0;
+    return (
+      <span className={`text-[9px] font-bold px-1 py-0.2 rounded ml-1 ${isNegative ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+        {margin > 0 ? '+' : ''}{margin.toFixed(1)}% {t('margin')}
+      </span>
+    );
+  };
   
   // Modals for PO/SO
   const [showPOModal, setShowPOModal] = useState(false);
@@ -1866,7 +1991,7 @@ export default function App() {
       companyId: currentUser?.companyId,
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
     };
-    saveAllData({ auditTrails: [newLog, ...auditTrails] });
+    saveAllData({ auditTrails: [newLog, ...(dbStateRef.current?.auditTrails || auditTrails)] });
   };
 
   // --- ACTIONS ---
@@ -3482,10 +3607,15 @@ export default function App() {
                                 return pOrder;
                               });
                               const updatedStock = stockItems.map(p => {
-                                const itemPO = po.items.find(i => i.productId === p.id);
-                                if (itemPO) {
+                                const matchingItems = po.items.filter(i => i.productId === p.id);
+                                if (matchingItems.length > 0) {
                                   const nextStockObj = { ...p.stock };
-                                  nextStockObj[po.storeId] = (nextStockObj[po.storeId] || 0) + itemPO.qty;
+                                  let totalAdded = 0;
+                                  matchingItems.forEach(itemPO => {
+                                    const conversion = (itemPO.unitType || 'main') === 'main' && p.useSubUnitPricing ? (p.subUnitConversion || 1) : 1;
+                                    totalAdded += itemPO.qty * conversion;
+                                  });
+                                  nextStockObj[po.storeId] = (nextStockObj[po.storeId] || 0) + totalAdded;
                                   return { ...p, stock: nextStockObj };
                                 }
                                 return p;
@@ -3732,6 +3862,8 @@ export default function App() {
             settings={settings}
             currentUser={currentUser}
             onNavigate={(page) => setCurrentPage(page)}
+            salesOrders={salesOrders}
+            purchaseOrders={purchaseOrders}
           />
         );
       case 'import-stock':
@@ -4055,6 +4187,8 @@ export default function App() {
           onOpenSettings={() => setShowSettingsModal(true)}
           onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
           pageTitle={currentPage}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
         />
 
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 scrollbar-thin">
@@ -4437,24 +4571,36 @@ export default function App() {
                   className="w-full px-3 py-2 border rounded-lg text-sm bg-white"
                 >
                   <option value="Kg">Kilograms (Kg)</option>
-                  <option value="Litres">Litres</option>
+                  <option value="Grams">Grams (g)</option>
+                  <option value="Litres">Litres (L)</option>
+                  <option value="Pcs">Pieces (Pcs)</option>
                   <option value="Package">Package</option>
+                  <option value="Sack">Sack / Bag (Sack)</option>
+                  <option value="Carton">Carton (Ctn)</option>
+                  <option value="Box">Box (Box)</option>
+                  <option value="Crate">Crate (Crt)</option>
+                  <option value="Dozen">Dozen (Dzn)</option>
+                  <option value="Bundle">Bundle (Bndl)</option>
+                  <option value="Roll">Roll (Roll)</option>
+                  <option value="Gallon">Gallon (Gal)</option>
+                  <option value="Pallet">Pallet (Plt)</option>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-700">Purchase Price</label>
+                  <label className="text-xs font-semibold text-gray-700">{t('Purchase Price')}</label>
                   <input
                     type="number"
                     step="any"
                     name="purchasePrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.purchasePrice * settings.exchangeRate : editingStockItem.purchasePrice) : ''}
-                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    value={formPurchasePrice}
+                    onChange={(e) => handleMainPriceChange('purchase', e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-700">Alert Min Quantity</label>
+                  <label className="text-xs font-semibold text-gray-700">{t('Alert Min Quantity')}</label>
                   <input
                     type="number"
                     name="lowStockQty"
@@ -4466,36 +4612,48 @@ export default function App() {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-700">Retail Price</label>
+                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
+                    {t('Retail Price')}
+                    {getMarginText(formRetailPrice, formPurchasePrice)}
+                  </label>
                   <input
                     type="number"
                     step="any"
                     name="retailPrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.retailPrice * settings.exchangeRate : editingStockItem.retailPrice) : ''}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    value={formRetailPrice}
+                    onChange={(e) => handleMainPriceChange('retail', e.target.value)}
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-700">Wholesale Price</label>
+                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
+                    {t('Wholesale Price')}
+                    {getMarginText(formWholesalePrice, formPurchasePrice)}
+                  </label>
                   <input
                     type="number"
                     step="any"
                     name="wholesalePrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? editingStockItem.wholesalePrice * settings.exchangeRate : editingStockItem.wholesalePrice) : ''}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    value={formWholesalePrice}
+                    onChange={(e) => handleMainPriceChange('wholesale', e.target.value)}
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-700">Partner Price</label>
+                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
+                    {t('Partner Price')}
+                    {getMarginText(formPartnerPrice, formPurchasePrice)}
+                  </label>
                   <input
                     type="number"
                     step="any"
                     name="partnerPrice"
                     required
-                    defaultValue={editingStockItem ? (settings.currency !== 'USD' ? (editingStockItem.partnerPrice || editingStockItem.retailPrice) * settings.exchangeRate : (editingStockItem.partnerPrice || editingStockItem.retailPrice)) : ''}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-gray-50 outline-none font-mono"
+                    value={formPartnerPrice}
+                    onChange={(e) => handleMainPriceChange('partner', e.target.value)}
+                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
                   />
                 </div>
               </div>
@@ -4528,13 +4686,14 @@ export default function App() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-gray-600 uppercase">Conversion Factor (Qty in Main Unit)</label>
+                        <label className="text-[10px] font-bold text-gray-600 uppercase">Conversion Factor</label>
                         <input
                           type="number"
                           step="any"
                           name="subUnitConversion"
-                          placeholder="e.g. 1000 for Kg to gram, 12 for Box"
-                          defaultValue={editingStockItem?.subUnitConversion || ''}
+                          placeholder="e.g. 1000, 12"
+                          value={formConversionFactor}
+                          onChange={(e) => handleConversionChange(e.target.value)}
                           required={formUseSubUnit}
                           className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
                         />
@@ -4542,34 +4701,46 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Retail Price</label>
+                        <label className="text-[9px] font-bold text-gray-600 uppercase flex flex-wrap items-center">
+                          Retail
+                          {getSubMarginText(formSubRetailPrice, formPurchasePrice, formConversionFactor)}
+                        </label>
                         <input
                           type="number"
                           step="any"
                           name="subUnitRetailPrice"
-                          defaultValue={editingStockItem && editingStockItem.subUnitRetailPrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitRetailPrice * settings.exchangeRate : editingStockItem.subUnitRetailPrice) : ''}
+                          value={formSubRetailPrice}
+                          onChange={(e) => setFormSubRetailPrice(e.target.value)}
                           required={formUseSubUnit}
                           className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Wholesale Price</label>
+                        <label className="text-[9px] font-bold text-gray-600 uppercase flex flex-wrap items-center">
+                          Wholesale
+                          {getSubMarginText(formSubWholesalePrice, formPurchasePrice, formConversionFactor)}
+                        </label>
                         <input
                           type="number"
                           step="any"
                           name="subUnitWholesalePrice"
-                          defaultValue={editingStockItem && editingStockItem.subUnitWholesalePrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitWholesalePrice * settings.exchangeRate : editingStockItem.subUnitWholesalePrice) : ''}
+                          value={formSubWholesalePrice}
+                          onChange={(e) => setFormSubWholesalePrice(e.target.value)}
                           required={formUseSubUnit}
                           className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-gray-600 uppercase">Sub Partner Price</label>
+                        <label className="text-[9px] font-bold text-gray-600 uppercase flex flex-wrap items-center">
+                          Partner
+                          {getSubMarginText(formSubPartnerPrice, formPurchasePrice, formConversionFactor)}
+                        </label>
                         <input
                           type="number"
                           step="any"
                           name="subUnitPartnerPrice"
-                          defaultValue={editingStockItem && editingStockItem.subUnitPartnerPrice !== undefined ? (settings.currency !== 'USD' ? editingStockItem.subUnitPartnerPrice * settings.exchangeRate : editingStockItem.subUnitPartnerPrice) : ''}
+                          value={formSubPartnerPrice}
+                          onChange={(e) => setFormSubPartnerPrice(e.target.value)}
                           required={formUseSubUnit}
                           className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none font-mono"
                         />

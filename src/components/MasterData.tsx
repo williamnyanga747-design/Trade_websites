@@ -35,6 +35,8 @@ interface MasterDataProps {
   settings?: any;
   currentUser?: any;
   onNavigate?: (page: string) => void;
+  salesOrders?: any[];
+  purchaseOrders?: any[];
 }
 
 export default function MasterData({
@@ -60,7 +62,9 @@ export default function MasterData({
   saveAllData,
   settings,
   currentUser,
-  onNavigate
+  onNavigate,
+  salesOrders = [],
+  purchaseOrders = []
 }: MasterDataProps) {
   const [editingItem, setEditingItem] = useState<{ type: string; data: any } | null>(null);
   const [activeStoreDetailsId, setActiveStoreDetailsId] = useState<number | null>(null);
@@ -1030,6 +1034,8 @@ export default function MasterData({
       const deletedCompanies = companies.filter(c => c.isDeleted);
       const deletedBranches = branches.filter(b => b.isDeleted);
       const deletedStores = stores.filter(s => s.isDeleted);
+      const deletedPurchases = purchaseOrders.filter(po => po.isDeleted);
+      const voidedSales = salesOrders.filter(so => so.status === 'Voided');
 
       return (
         <div className="space-y-6 max-w-4xl mx-auto">
@@ -1204,6 +1210,158 @@ export default function MasterData({
                           <button
                             onClick={() => handlePermanentDeleteStore(s.id)}
                             className="text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition mx-auto animate-pulse hover:animate-none"
+                          >
+                            <Trash2 className="w-3 h-3" /> {t('Permanent')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Voided Sales Orders Section */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden animate-none">
+            <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+              <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                🛑 {t('Voided Sales Invoices (Audit Trail)')}
+              </h4>
+              <span className="text-xs font-bold text-gray-400">
+                {voidedSales.length} {t('records')}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px] text-left">
+                <thead className="bg-gray-50 border-b text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3">{t('Invoice / SO Number')}</th>
+                    <th className="px-6 py-3">{t('Store / Customer')}</th>
+                    <th className="px-6 py-3">{t('Total Amount')}</th>
+                    <th className="px-6 py-3 w-40 text-center">{t('Restore / Unvoid')}</th>
+                    <th className="px-6 py-3 w-40 text-center">{t('Permanent Delete')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {voidedSales.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">
+                        {t('No voided sales invoices found.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    voidedSales.map(so => (
+                      <tr key={so.id} className="hover:bg-gray-50/50">
+                        <td className="px-6 py-4">
+                          <span className="font-mono font-bold text-brand">{so.soNumber}</span>
+                          <span className="block text-[10px] text-gray-400">{so.date}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="font-bold text-gray-900 block">🏪 {stores.find(s => s.id === so.storeId)?.name || `Store #${so.storeId}`}</span>
+                          <span className="text-xs text-gray-500">👤 {customers.find(c => c.id === so.customerId)?.name || `Customer #${so.customerId}`}</span>
+                        </td>
+                        <td className="px-6 py-4 font-bold text-gray-950 font-mono">
+                          {formatMoney(so.total, currency, exchangeRate)}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            onClick={() => {
+                              const updated = salesOrders.map(item => item.id === so.id ? { ...item, status: 'Completed' } : item);
+                              saveAllData({ salesOrders: updated });
+                              toast.success(t('Sales invoice successfully restored/unvoided!'));
+                              logAction?.('Restored Sales Order', `Restored voided sales invoice ${so.soNumber}`);
+                            }}
+                            className="text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition mx-auto"
+                          >
+                            <RefreshCw className="w-3 h-3" /> {t('Unvoid')}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            onClick={() => {
+                              const updated = salesOrders.filter(item => item.id !== so.id);
+                              saveAllData({ salesOrders: updated });
+                              toast.success(t('Sales invoice permanently deleted!'));
+                              logAction?.('Permanently Deleted Sales Order', `Permanently deleted sales invoice ${so.soNumber}`);
+                            }}
+                            className="text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition mx-auto"
+                          >
+                            <Trash2 className="w-3 h-3" /> {t('Permanent')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Deleted Purchase Orders Section */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden animate-none">
+            <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+              <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                📦 {t('Deleted Purchase Orders')}
+              </h4>
+              <span className="text-xs font-bold text-gray-400">
+                {deletedPurchases.length} {t('records')}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px] text-left">
+                <thead className="bg-gray-50 border-b text-[10px] uppercase font-bold text-gray-500 tracking-wider">
+                  <tr>
+                    <th className="px-6 py-3">{t('PO Number')}</th>
+                    <th className="px-6 py-3">{t('Store / Supplier')}</th>
+                    <th className="px-6 py-3">{t('Total Amount')}</th>
+                    <th className="px-6 py-3 w-40 text-center">{t('Restore')}</th>
+                    <th className="px-6 py-3 w-40 text-center">{t('Permanent Delete')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {deletedPurchases.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">
+                        {t('No deleted purchase orders found.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    deletedPurchases.map(po => (
+                      <tr key={po.id} className="hover:bg-gray-50/50">
+                        <td className="px-6 py-4">
+                          <span className="font-mono font-bold text-brand">{po.poNumber}</span>
+                          <span className="block text-[10px] text-gray-400">{po.date}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="font-bold text-gray-900 block">🏪 {stores.find(s => s.id === po.storeId)?.name || `Store #${po.storeId}`}</span>
+                          <span className="text-xs text-gray-500">👤 {suppliers.find(s => s.id === po.supplierId)?.name || `Supplier #${po.supplierId}`}</span>
+                        </td>
+                        <td className="px-6 py-4 font-bold text-gray-950 font-mono">
+                          {formatMoney(po.total, currency, exchangeRate)}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            onClick={() => {
+                              const updated = purchaseOrders.map(item => item.id === po.id ? { ...item, isDeleted: false } : item);
+                              saveAllData({ purchaseOrders: updated });
+                              toast.success(t('Purchase order successfully restored!'));
+                              logAction?.('Restored Purchase Order', `Restored deleted purchase order ${po.poNumber}`);
+                            }}
+                            className="text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition mx-auto"
+                          >
+                            <RefreshCw className="w-3 h-3" /> {t('Restore')}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            onClick={() => {
+                              const updated = purchaseOrders.filter(item => item.id !== po.id);
+                              saveAllData({ purchaseOrders: updated });
+                              toast.success(t('Purchase order permanently deleted!'));
+                              logAction?.('Permanently Deleted Purchase Order', `Permanently deleted purchase order ${po.poNumber}`);
+                            }}
+                            className="text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition mx-auto"
                           >
                             <Trash2 className="w-3 h-3" /> {t('Permanent')}
                           </button>

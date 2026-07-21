@@ -71,6 +71,16 @@ export default function POSModal({
   const [completedOrder, setCompletedOrder] = useState<SalesOrder | null>(null);
   const [activeTab, setActiveTab] = useState<'catalog' | 'cart'>('catalog');
 
+  // Checkout & Payment states
+  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Bank' | 'Mobile Money' | 'Split'>('Cash');
+  const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Credit' | 'Partial'>('Paid');
+  const [cashAmount, setCashAmount] = useState<number>(0);
+  const [bankAmount, setBankAmount] = useState<number>(0);
+  const [mobileAmount, setMobileAmount] = useState<number>(0);
+  const [orderDiscountType, setOrderDiscountType] = useState<'Flat' | 'Percentage'>('Flat');
+  const [orderDiscountValue, setOrderDiscountValue] = useState<number>(0);
+  const [orderNote, setOrderNote] = useState<string>('');
+
   // Digital Invoice / WhatsApp states
   const [showWhatsAppInput, setShowWhatsAppInput] = useState(false);
   const [showEmailInput, setShowEmailInput] = useState(false);
@@ -294,14 +304,24 @@ export default function POSModal({
   }, [selectedCustomerId, selectedCustomer]);
 
   // Helper to get active product price
-  const getProductPrice = (item: StockItem, unitType: 'main' | 'sub' = 'main') => {
+  const getProductPrice = (item: StockItem, unitType: 'main' | 'sub' = 'main', activePriceType?: 'Retail' | 'Wholesale' | 'Preferred') => {
+    const currentPriceType = activePriceType || priceType;
     if (unitType === 'sub') {
-      if (priceType === 'Wholesale') return item.subUnitWholesalePrice ?? item.subUnitRetailPrice ?? 0;
-      if (priceType === 'Preferred') return item.subUnitPartnerPrice ?? item.subUnitRetailPrice ?? 0;
-      return item.subUnitRetailPrice ?? 0;
+      let price = 0;
+      if (currentPriceType === 'Wholesale') price = item.subUnitWholesalePrice ?? item.subUnitRetailPrice ?? 0;
+      else if (currentPriceType === 'Preferred') price = item.subUnitPartnerPrice ?? item.subUnitRetailPrice ?? 0;
+      else price = item.subUnitRetailPrice ?? 0;
+
+      // If price is 0, calculate it proportionally from the wholesale package price
+      if (price <= 0) {
+        const parentPrice = currentPriceType === 'Wholesale' ? item.wholesalePrice : (currentPriceType === 'Preferred' ? (item.partnerPrice ?? item.retailPrice) : item.retailPrice);
+        const conversion = item.subUnitConversion || 1;
+        price = parentPrice / conversion;
+      }
+      return price;
     }
-    if (priceType === 'Wholesale') return item.wholesalePrice;
-    if (priceType === 'Preferred') return item.partnerPrice ?? item.retailPrice;
+    if (currentPriceType === 'Wholesale') return item.wholesalePrice;
+    if (currentPriceType === 'Preferred') return item.partnerPrice ?? item.retailPrice;
     return item.retailPrice;
   };
 
@@ -356,13 +376,14 @@ export default function POSModal({
     const existingCartIndex = cart.findIndex(c => c.productId === item.id && (c.unitType || 'main') === 'main');
     const targetPrice = getProductPrice(item, 'main');
 
+    const itemConversion = item.subUnitConversion || 1;
     if (existingCartIndex > -1) {
       const currentQtyInCart = cart[existingCartIndex].qty;
       const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id, 'main');
-      const itemConversion = item.subUnitConversion || 1;
       const totalRequiredBaseUnits = otherBaseUnits + (currentQtyInCart + 1) * itemConversion;
       if (totalRequiredBaseUnits > availableStock) {
-        setErrorMsg(`${t('Cannot add more than available stock')} (${formatStockQty(availableStock, item)} ${t('available')})`);
+        const availableInUnit = (availableStock - otherBaseUnits) / itemConversion;
+        setErrorMsg(`${t('Requested')} ${currentQtyInCart + 1} ${item.unit || 'unit'} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${item.unit || 'unit'}.`);
         return;
       }
       const updatedCart = [...cart];
@@ -372,10 +393,10 @@ export default function POSModal({
       setCart(updatedCart);
     } else {
       const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id);
-      const itemConversion = item.subUnitConversion || 1;
       const totalRequiredBaseUnits = otherBaseUnits + 1 * itemConversion;
       if (totalRequiredBaseUnits > availableStock) {
-        setErrorMsg(`${t('Cannot add more than available stock')} (${formatStockQty(availableStock, item)} ${t('available')})`);
+        const availableInUnit = (availableStock - otherBaseUnits) / itemConversion;
+        setErrorMsg(`${t('Requested')} 1 ${item.unit || 'unit'} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${item.unit || 'unit'}.`);
         return;
       }
       setCart([
@@ -427,7 +448,8 @@ export default function POSModal({
 
     if (otherBaseUnits + requestedBaseUnits > availableStock) {
       const maxAllowedInThisUnit = (availableStock - otherBaseUnits) / conversion;
-      setErrorMsg(`${t('Only')} ${parseFloat(maxAllowedInThisUnit.toFixed(4))} ${unitType === 'sub' ? (item.subUnitName || 'sub-units') : (item.unit || 'units')} ${t('are available in stock!')}`);
+      const unitLabel = unitType === 'sub' ? (item.subUnitName || 'sub-unit') : (item.unit || 'unit');
+      setErrorMsg(`${t('Requested')} ${newQty} ${unitLabel} ${t('exceeds available stock of')} ${parseFloat(maxAllowedInThisUnit.toFixed(4))} ${unitLabel}.`);
       return;
     }
 
@@ -450,7 +472,7 @@ export default function POSModal({
     setCart(cart.map(c => {
       const item = stockItems.find(p => p.id === c.productId);
       if (item) {
-        const price = getProductPrice(item, c.unitType || 'main');
+        const price = getProductPrice(item, c.unitType || 'main', newMode);
         return {
           ...c,
           price
@@ -474,12 +496,18 @@ export default function POSModal({
         totalCost += c.cost * c.qty;
       }
     });
+    const discountAmount = orderDiscountType === 'Percentage'
+      ? grossTotal * (orderDiscountValue / 100)
+      : orderDiscountValue;
+    const finalTotal = Math.max(0, grossTotal - discountAmount);
     return {
-      total: grossTotal,
+      gross: grossTotal,
+      discount: discountAmount,
+      total: finalTotal,
       cost: totalCost,
-      profit: grossTotal - totalCost
+      profit: finalTotal - totalCost
     };
-  }, [cart, stockItems]);
+  }, [cart, stockItems, orderDiscountType, orderDiscountValue]);
 
   // Check customer credit limit validation
   const isCreditExceeded = useMemo(() => {
@@ -509,12 +537,38 @@ export default function POSModal({
       const conversion = cartItem.unitType === 'main' ? (item.subUnitConversion || 1) : 1;
       const requiredQtyInBaseUnits = cartItem.qty * conversion;
       if (requiredQtyInBaseUnits > currentStock) {
-        setErrorMsg(`${t('Stock changed or insufficient for')} "${item.name}". (${t('Available')}: ${formatStockQty(currentStock, item)})`);
+        const availableInUnit = currentStock / conversion;
+        const unitLabel = cartItem.unitType === 'sub' ? (item.subUnitName || 'sub-unit') : (item.unit || 'unit');
+        setErrorMsg(`${t('Requested')} ${cartItem.qty} ${unitLabel} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${unitLabel}.`);
         return;
       }
     }
 
     const maxId = salesOrders.length > 0 ? Math.max(...salesOrders.map(s => s.id)) : 0;
+    
+    // Determine actual cash portion received to track in register shift drawer
+    let cashPaidPortion = 0;
+    if (paymentMethod === 'Cash' && paymentStatus === 'Paid') {
+      cashPaidPortion = totals.total;
+    } else if (paymentMethod === 'Split') {
+      cashPaidPortion = cashAmount;
+    } else if (paymentMethod === 'Cash' && paymentStatus === 'Partial') {
+      cashPaidPortion = cashAmount || (totals.total * 0.5); // Fallback to half if not specified
+    }
+
+    // Outstanding credit portion to add to customer balance
+    let creditOutstanding = 0;
+    if (paymentStatus === 'Credit') {
+      creditOutstanding = totals.total;
+    } else if (paymentStatus === 'Partial') {
+      const totalPaid = paymentMethod === 'Split'
+        ? (cashAmount + bankAmount + mobileAmount)
+        : (paymentMethod === 'Cash' ? cashAmount : (paymentMethod === 'Bank' ? bankAmount : mobileAmount));
+      creditOutstanding = Math.max(0, totals.total - totalPaid);
+    } else if (priceType === 'Wholesale' && paymentStatus === 'Credit') {
+      creditOutstanding = totals.total;
+    }
+
     const newSO: SalesOrder = {
       id: maxId + 1,
       soNumber: `SO-2024-${String(5004 + maxId).padStart(4, '0')}`,
@@ -535,7 +589,10 @@ export default function POSModal({
       }),
       total: totals.total,
       profit: totals.profit,
-      status: 'Completed'
+      status: 'Completed',
+      paymentMethod: paymentMethod,
+      paymentStatus: paymentStatus,
+      paymentSplit: paymentMethod === 'Split' ? { cash: cashAmount, bank: bankAmount, mobile: mobileAmount } : undefined
     };
 
     // Subtract stock quantities
@@ -554,12 +611,12 @@ export default function POSModal({
       return p;
     });
 
-    // Update customer outstanding balance if Wholesale pricing mode is used
+    // Update customer outstanding balance
     const updatedCustomers = customers.map(c => {
       if (c.id === selectedCustomerId) {
         return {
           ...c,
-          balance: (c.balance || 0) + (priceType === 'Wholesale' ? totals.total : 0)
+          balance: (c.balance || 0) + creditOutstanding
         };
       }
       return c;
@@ -571,7 +628,7 @@ export default function POSModal({
         return {
           ...s,
           salesOrderIds: [...(s.salesOrderIds || []), newSO.id],
-          expectedCashSales: (s.expectedCashSales || 0) + newSO.total
+          expectedCashSales: (s.expectedCashSales || 0) + cashPaidPortion
         };
       }
       return s;
@@ -1616,6 +1673,151 @@ export default function POSModal({
                 )}
               </div>
             </div>
+
+            {/* Payment & Adjustments Panel */}
+            {cart.length > 0 && (
+              <div className="border-t pt-3 mt-3 space-y-3 px-1 no-print">
+                <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                  <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
+                    ⚡ {t('Discounts & Transaction Notes')}
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Type')}</label>
+                      <select
+                        value={orderDiscountType}
+                        onChange={(e) => setOrderDiscountType(e.target.value as 'Flat' | 'Percentage')}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                      >
+                        <option value="Flat">{t('Flat')}</option>
+                        <option value="Percentage">{t('Percentage (%)')}</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Value')}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={orderDiscountValue}
+                        onChange={(e) => setOrderDiscountValue(parseFloat(e.target.value) || 0)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold outline-none focus:border-brand"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Transaction Notes')}</label>
+                    <input
+                      type="text"
+                      placeholder={t('Any internal memo or delivery note...')}
+                      value={orderNote}
+                      onChange={(e) => setOrderNote(e.target.value)}
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs outline-none focus:border-brand"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                  <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
+                    💳 {t('Payment Mode & Split Options')}
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Method')}</label>
+                      <select
+                        value={paymentMethod}
+                        onChange={(e) => setPaymentMethod(e.target.value as 'Cash' | 'Bank' | 'Mobile Money' | 'Split')}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                      >
+                        <option value="Cash">{t('Cash')}</option>
+                        <option value="Bank">{t('Bank / Transfer')}</option>
+                        <option value="Mobile Money">{t('Mobile Money (M-Pesa/Tigo)')}</option>
+                        <option value="Split">{t('Split Payments 🔄')}</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Status')}</label>
+                      <select
+                        value={paymentStatus}
+                        onChange={(e) => setPaymentStatus(e.target.value as 'Paid' | 'Credit' | 'Partial')}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                      >
+                        <option value="Paid">{t('Paid in Full')}</option>
+                        <option value="Credit">{t('Credit / On Account')}</option>
+                        <option value="Partial">{t('Partial Deposit')}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Split payments inputs */}
+                  {paymentMethod === 'Split' && (
+                    <div className="space-y-1.5 pt-2 border-t mt-2">
+                      <span className="text-[9px] font-extrabold text-indigo-600 uppercase block">{t('Split Breakdown')}</span>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <div className="space-y-0.5">
+                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Cash')}</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={cashAmount || ''}
+                            onChange={(e) => setCashAmount(parseFloat(e.target.value) || 0)}
+                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                          />
+                        </div>
+                        <div className="space-y-0.5">
+                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Bank')}</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={bankAmount || ''}
+                            onChange={(e) => setBankAmount(parseFloat(e.target.value) || 0)}
+                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                          />
+                        </div>
+                        <div className="space-y-0.5">
+                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Mobile')}</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={mobileAmount || ''}
+                            onChange={(e) => setMobileAmount(parseFloat(e.target.value) || 0)}
+                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-bold text-indigo-500 mt-1 flex justify-between font-mono">
+                        <span>{t('Total Split Paid')}:</span>
+                        <span>{formatMoney(cashAmount + bankAmount + mobileAmount, settings.currency, settings.exchangeRate)}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Partial payment inputs */}
+                  {paymentStatus === 'Partial' && paymentMethod !== 'Split' && (
+                    <div className="space-y-1 pt-2 border-t mt-2">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">
+                        {paymentMethod === 'Cash' ? t('Amount Paid (Cash)') : (paymentMethod === 'Bank' ? t('Amount Paid (Bank)') : t('Amount Paid (Mobile)'))}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Enter deposit amount"
+                        value={paymentMethod === 'Cash' ? cashAmount || '' : (paymentMethod === 'Bank' ? bankAmount || '' : mobileAmount || '')}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          if (paymentMethod === 'Cash') setCashAmount(val);
+                          else if (paymentMethod === 'Bank') setBankAmount(val);
+                          else setMobileAmount(val);
+                        }}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold font-mono outline-none focus:border-brand"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Grand Summary Calculations and Submission */}
             <div className="pt-4 border-t space-y-3 mt-4 bg-gray-50">

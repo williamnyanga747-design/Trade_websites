@@ -1,7 +1,7 @@
 import React from 'react';
 import { User, Company, Branch, Store, Settings } from '../types';
 import { translate } from '../utils/format';
-import { Settings as SettingsIcon, Menu, Bell } from 'lucide-react';
+import { Settings as SettingsIcon, Menu, Bell, Sun, Moon } from 'lucide-react';
 
 interface HeaderProps {
   currentPage: string;
@@ -17,6 +17,8 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onToggleMobileSidebar: () => void;
   pageTitle: string;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }
 
 export default function Header({
@@ -32,7 +34,9 @@ export default function Header({
   onContextChange,
   onOpenSettings,
   onToggleMobileSidebar,
-  pageTitle
+  pageTitle,
+  theme,
+  onToggleTheme
 }: HeaderProps) {
   const isSuperAdmin = currentUser?.role === 'Super Admin';
   const isAdmin = currentUser?.role === 'Admin' || isSuperAdmin;
@@ -80,6 +84,15 @@ export default function Header({
       </h1>
 
       <div className="ml-auto flex items-center gap-2 sm:gap-3">
+        {/* Global Theme Toggle Button */}
+        <button
+          onClick={onToggleTheme}
+          className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition text-white"
+          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+        >
+          {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-slate-100" />}
+        </button>
+
         {/* Settings button shown only to admin roles */}
         {isAdmin && (
           <button

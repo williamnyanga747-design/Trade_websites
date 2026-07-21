@@ -66,6 +66,9 @@ export interface POItem {
   productId: number;
   qty: number;
   cost: number;
+  discount?: number; // item-level discount in absolute value (in currency)
+  unitType?: 'main' | 'sub';
+  subUnitName?: string;
 }
 
 export interface PurchaseOrder {
@@ -77,6 +80,8 @@ export interface PurchaseOrder {
   status: 'Pending' | 'Received';
   items: POItem[];
   total: number;
+  paymentTerms?: string; // 'Paid in Full' | 'Credit / On Account' | 'Partial Deposit'
+  isDeleted?: boolean;
 }
 
 export interface SOItem {
@@ -99,6 +104,9 @@ export interface SalesOrder {
   total: number;
   profit: number;
   status: 'Completed' | 'Voided';
+  paymentMethod?: 'Cash' | 'Bank' | 'Mobile Money' | 'Split';
+  paymentStatus?: 'Paid' | 'Credit' | 'Partial';
+  paymentSplit?: { cash: number; bank: number; mobile: number };
 }
 
 export interface Expense {
