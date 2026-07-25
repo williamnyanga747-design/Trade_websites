@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expense, PosShift } from '../types';
+import { SalesOrder, PurchaseOrder, StockItem, Customer, Supplier, Store, Expense, PosShift, Company, Branch } from '../types';
 import { formatMoney } from '../utils/format';
 import { toast } from '../utils/toast';
 import {
-  FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar, ShieldAlert
+  FileSpreadsheet, Printer, Clock, User, Store as StoreIcon, TrendingUp, Coins, FileText, AlertCircle, Calendar, ShieldAlert, Building2
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
@@ -16,7 +16,11 @@ interface ReportsProps {
   customers: Customer[];
   suppliers: Supplier[];
   stores: Store[];
+  companies?: Company[];
+  branches?: Branch[];
   expenses?: Expense[];
+  currentCompanyId?: number | null;
+  currentBranchId?: number | null;
   currentStoreId: number | null;
   currency: string;
   exchangeRate: number;
@@ -32,7 +36,11 @@ export default function Reports({
   customers,
   suppliers,
   stores,
+  companies = [],
+  branches = [],
   expenses = [],
+  currentCompanyId,
+  currentBranchId,
   currentStoreId,
   currency,
   exchangeRate,
@@ -1445,8 +1453,34 @@ export default function Reports({
     }
   };
 
+  const activeCompanyObj = companies.find(c => c.id === currentCompanyId);
+  const activeBranchObj = branches.find(b => b.id === currentBranchId);
+  const activeStoreObj = stores.find(s => s.id === currentStoreId);
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 w-full">
+      {/* Reporting Entity Context Header Banner */}
+      <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-sm border border-slate-800 flex flex-wrap items-center justify-between gap-3 mb-5 no-print">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-brand/20 text-brand flex items-center justify-center font-bold border border-brand/30">
+            <Building2 className="w-5 h-5 text-brand" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-brand">REPORTING ENTITY CONTEXT</span>
+              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold uppercase">Active Scope</span>
+            </div>
+            <h3 className="text-sm font-black text-white flex flex-wrap items-center gap-2 mt-0.5">
+              <span>Company: <strong className="text-brand">{activeCompanyObj?.name || 'All Companies'}</strong></span>
+              <span className="text-slate-600">•</span>
+              <span>Branch: <strong className="text-slate-200">{activeBranchObj?.name || 'All Branches'}</strong></span>
+              <span className="text-slate-600">•</span>
+              <span>Store Depot: <strong className="text-emerald-400">{activeStoreObj?.name || 'All Stores'}</strong></span>
+            </h3>
+          </div>
+        </div>
+      </div>
+
       <h3 className="font-bold text-lg text-gray-900 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <span>{reportTitle}</span>
         <div className="flex items-center gap-2 no-print">

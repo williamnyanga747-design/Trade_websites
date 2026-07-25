@@ -501,7 +501,6 @@ export default function ManageUsers({
                               const remaining = auditTrails.filter(item => item.id !== l.id);
                               saveAllData({ auditTrails: remaining });
                               toast.success(t('Core action log deleted successfully.'));
-                              logAction('Delete Core Action Log', `Permanently deleted core audit log ID: ${l.id}`);
                             }
                           });
                         }}
@@ -958,7 +957,6 @@ export default function ManageUsers({
                                     const remaining = auditTrails.filter(item => item.id !== l.id);
                                     saveAllData({ auditTrails: remaining });
                                     toast.success(t('Telemetry log deleted successfully.'));
-                                    logAction('Delete Telemetry Log', `Permanently deleted telemetry audit log ID: ${l.id}`);
                                   }
                                 });
                               }}
@@ -985,6 +983,14 @@ export default function ManageUsers({
             </div>
           );
         })()}
+        
+        <ConfirmActionModal
+          isOpen={confirmModal.isOpen}
+          onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+          onConfirm={confirmModal.onConfirm}
+          title={confirmModal.title}
+          description={confirmModal.description}
+        />
       </div>
     );
   }

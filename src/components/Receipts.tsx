@@ -1169,7 +1169,7 @@ export default function Receipts({
 
                 {/* TEMPLATE B: COMPACT 80MM POS THERMAL SLIP */}
                 {receiptTemplate === 'thermal' && (
-                  <div className="animate-fade-in max-w-[340px] mx-auto bg-gray-50/50 p-6 shadow-inner border border-dashed border-gray-300 rounded-xl font-mono text-xs text-gray-900 print:bg-white print:border-none print:shadow-none print:p-0">
+                  <div className="animate-fade-in max-w-[300px] mx-auto bg-gray-50/50 p-5 shadow-inner border border-dashed border-gray-300 rounded-xl font-mono text-xs text-gray-900 print-container print:bg-white print:border-none print:shadow-none print:p-0">
                     
                     {/* Security reprint stamp inside thermal slip */}
                     {printCount > 1 && (
@@ -1204,11 +1204,19 @@ export default function Receipts({
                         <span className="font-bold">{selectedReceipt.order.date}</span>
                       </div>
                       <div className="flex justify-between">
+                        <span className="text-gray-500">{translate('Company') || 'COMPANY'}:</span>
+                        <span className="font-bold">{companyName || 'Tradecore Unified'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">{translate('Store Location') || 'STORE'}:</span>
+                        <span className="font-bold">{getStoreDetails(selectedReceipt.order.storeId).name}</span>
+                      </div>
+                      <div className="flex justify-between">
                         <span className="text-gray-500">{translate('Cashier / Staff Name') || 'CASHIER'}:</span>
                         <span className="font-bold">{currentUser?.username || 'admin'}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-gray-500">{translate('Customers') || 'CLIENT'}:</span>
+                        <span className="text-gray-500">{selectedReceipt.type === 'selling' ? (translate('Customers') || 'CLIENT') : (translate('Suppliers') || 'SUPPLIER')}:</span>
                         <span className="font-bold truncate max-w-[180px]">
                           {selectedReceipt.type === 'selling' 
                             ? getCustomerName(selectedReceipt.order.customerId)

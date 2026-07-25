@@ -19,8 +19,10 @@ import ImportData from './components/ImportData';
 import Reports from './components/Reports';
 import ManageUsers from './components/ManageUsers';
 import Profile from './components/Profile';
+import AICopilot from './components/AICopilot';
 import POSModal from './components/POSModal';
 import PurchaseOrderModal from './components/PurchaseOrderModal';
+import ArcadeGameModal from './components/ArcadeGameModal';
 import { ConfirmActionModal } from './components/ConfirmActionModal';
 
 // Utils
@@ -28,6 +30,7 @@ import { translate, formatMoney, exportToExcel } from './utils/format';
 import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
+import { getFIFOInventoryValuation, cleanupEmptyBatches } from './utils/fifo';
 import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
 import { toast, Toast } from './utils/toast';
 import { getStoreCategories, cleanCategoryName } from './utils/categoryHelper';
@@ -41,7 +44,7 @@ import {
   BarChart3, Users, UserCircle, LogOut, Settings as SettingsIcon, Search, Plus, ArrowLeftRight,
   Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X, XCircle, Check,
   ShieldAlert, DollarSign as DollarIcon, CreditCard, Monitor, Barcode, Store as StoreIcon,
-  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck, ChevronDown, ChevronUp
+  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck, ChevronDown, ChevronUp, Building2, Camera, Layers
 } from 'lucide-react';
 
 // Helper function to darken/lighten hex colors dynamically
@@ -86,30 +89,57 @@ export default function App() {
   const [currentBranchId, setCurrentBranchId] = useState<number | null>(null);
   const [currentStoreId, setCurrentStoreId] = useState<number | null>(null);
 
-  const getActiveCurrency = (): string => {
-    if (currentUser) {
-      if (settings.userCurrencies && settings.userCurrencies[currentUser.username]) {
-        return settings.userCurrencies[currentUser.username];
-      }
-      if (currentUser.companyId && settings.companyCurrencies && settings.companyCurrencies[currentUser.companyId]) {
-        return settings.companyCurrencies[currentUser.companyId];
+  // Camera capture modal state & stream ref
+  const [showCameraCaptureModal, setShowCameraCaptureModal] = useState<boolean>(false);
+  const cameraVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+
+  const getActiveLanguage = (specificCompId?: number): 'en' | 'sw' | 'fr' | 'es' => {
+    const targetCompId = specificCompId || currentCompanyId || currentUser?.companyId || (companies.length > 0 ? companies[0].id : undefined);
+    if (targetCompId) {
+      const companyObj = companies.find(c => c.id === targetCompId);
+      if (companyObj?.language) return companyObj.language;
+      if (settings.companyLanguages && settings.companyLanguages[targetCompId]) {
+        return settings.companyLanguages[targetCompId];
       }
     }
-    return settings.currency;
+    if (currentUser && (settings as any).userLanguages && (settings as any).userLanguages[currentUser.username]) {
+      return (settings as any).userLanguages[currentUser.username];
+    }
+    return settings.language || 'en';
   };
 
-  const getActiveExchangeRate = (): number => {
-    if (currentUser) {
-      if (settings.userExchangeRates && settings.userExchangeRates[currentUser.username] !== undefined) {
-        return settings.userExchangeRates[currentUser.username];
-      }
-      if (currentUser.companyId && settings.companyExchangeRates && settings.companyExchangeRates[currentUser.companyId] !== undefined) {
-        return settings.companyExchangeRates[currentUser.companyId];
+  const getActiveCurrency = (specificCompId?: number): string => {
+    const targetCompId = specificCompId || currentCompanyId || currentUser?.companyId || (companies.length > 0 ? companies[0].id : undefined);
+    if (targetCompId) {
+      const companyObj = companies.find(c => c.id === targetCompId);
+      if (companyObj?.currency) return companyObj.currency;
+      if (settings.companyCurrencies && settings.companyCurrencies[targetCompId]) {
+        return settings.companyCurrencies[targetCompId];
       }
     }
-    return settings.exchangeRate;
+    if (currentUser && settings.userCurrencies && settings.userCurrencies[currentUser.username]) {
+      return settings.userCurrencies[currentUser.username];
+    }
+    return settings.currency || 'USD';
   };
 
+  const getActiveExchangeRate = (specificCompId?: number): number => {
+    const targetCompId = specificCompId || currentCompanyId || currentUser?.companyId || (companies.length > 0 ? companies[0].id : undefined);
+    if (targetCompId) {
+      const companyObj = companies.find(c => c.id === targetCompId);
+      if (companyObj?.exchangeRate !== undefined) return companyObj.exchangeRate;
+      if (settings.companyExchangeRates && settings.companyExchangeRates[targetCompId] !== undefined) {
+        return settings.companyExchangeRates[targetCompId];
+      }
+    }
+    if (currentUser && settings.userExchangeRates && settings.userExchangeRates[currentUser.username] !== undefined) {
+      return settings.userExchangeRates[currentUser.username];
+    }
+    return settings.exchangeRate || 1;
+  };
+
+  const activeLanguage = getActiveLanguage();
   const activeCurrency = getActiveCurrency();
   const activeExchangeRate = getActiveExchangeRate();
 
@@ -126,7 +156,51 @@ export default function App() {
   }), [companies, branches, stores, users, stockItems, purchaseOrders, salesOrders, expenses]);
 
   const activeUsers = activeData.users;
-  const activeStockItems = activeData.stockItems;
+
+  // Refactored stock items: Private and exclusive to each company
+  const activeStockItems = React.useMemo(() => {
+    let items = activeData.stockItems;
+    const activeCompId = currentCompanyId || currentUser?.companyId;
+
+    // Strict Company Privacy Filter
+    if (activeCompId) {
+      items = items.filter(p => {
+        // Direct company ownership
+        if (p.companyId === activeCompId) return true;
+        // Fallback for unassigned legacy products
+        if (!p.companyId) {
+          const companyBranchIds = branches.filter(b => b.companyId === activeCompId).map(b => b.id);
+          const companyStoreIds = stores.filter(s => companyBranchIds.includes(s.branchId)).map(s => s.id);
+          const hasStockInCompanyStore = Object.keys(p.stock || {}).some(stIdStr => companyStoreIds.includes(parseInt(stIdStr, 10)));
+          return hasStockInCompanyStore;
+        }
+        return false;
+      });
+    }
+
+    return items.map(p => {
+      let priceObj: any = null;
+      if (currentStoreId && p.storePrices && p.storePrices[currentStoreId]) {
+        priceObj = p.storePrices[currentStoreId];
+      } else if (currentCompanyId && p.companyPrices && p.companyPrices[currentCompanyId]) {
+        priceObj = p.companyPrices[currentCompanyId];
+      }
+
+      if (priceObj) {
+        return {
+          ...p,
+          purchasePrice: priceObj.purchasePrice ?? p.purchasePrice,
+          retailPrice: priceObj.retailPrice ?? p.retailPrice,
+          wholesalePrice: priceObj.wholesalePrice ?? p.wholesalePrice,
+          partnerPrice: priceObj.partnerPrice ?? priceObj.retailPrice ?? p.partnerPrice,
+          subUnitRetailPrice: priceObj.subUnitRetailPrice ?? p.subUnitRetailPrice,
+          subUnitWholesalePrice: priceObj.subUnitWholesalePrice ?? p.subUnitWholesalePrice,
+          subUnitPartnerPrice: priceObj.subUnitPartnerPrice ?? p.subUnitPartnerPrice,
+        };
+      }
+      return p;
+    });
+  }, [activeData.stockItems, currentCompanyId, currentUser, branches, stores, currentStoreId]);
   const activePurchaseOrders = activeData.purchaseOrders;
   const activeSalesOrders = activeData.salesOrders;
   const activeExpenses = activeData.expenses;
@@ -181,6 +255,7 @@ export default function App() {
   const [forceConfirmPass, setForceConfirmPass] = useState('');
 
   // --- INTERACTIVE UI MODALS STATES ---
+  const [fifoBatchProduct, setFifoBatchProduct] = useState<StockItem | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   useEffect(() => {
@@ -234,6 +309,7 @@ export default function App() {
   };
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showGameModal, setShowGameModal] = useState(false);
   
   // Modals for Stock
   const [showStockModal, setShowStockModal] = useState(false);
@@ -260,11 +336,34 @@ export default function App() {
   const [formSubWholesalePrice, setFormSubWholesalePrice] = useState<string>('');
   const [formSubPartnerPrice, setFormSubPartnerPrice] = useState<string>('');
 
+  const [companyPricingInput, setCompanyPricingInput] = useState<Record<number, {
+    purchasePrice: string;
+    retailPrice: string;
+    wholesalePrice: string;
+    partnerPrice: string;
+    subUnitRetailPrice: string;
+    subUnitWholesalePrice: string;
+    subUnitPartnerPrice: string;
+  }>>({});
+
+  const [storePricingInput, setStorePricingInput] = useState<Record<number, {
+    purchasePrice: string;
+    retailPrice: string;
+    wholesalePrice: string;
+    partnerPrice: string;
+    subUnitRetailPrice: string;
+    subUnitWholesalePrice: string;
+    subUnitPartnerPrice: string;
+  }>>({});
+
   useEffect(() => {
     if (showStockModal) {
-      const isUSD = settings.currency === 'USD';
-      const multiplier = isUSD ? 1 : settings.exchangeRate;
+      const isUSD = activeCurrency === 'USD';
+      const multiplier = isUSD ? 1 : activeExchangeRate;
       
+      const initialPrices: Record<number, any> = {};
+      const initialStorePrices: Record<number, any> = {};
+
       if (editingStockItem) {
         setFormPurchasePrice(String(editingStockItem.purchasePrice * multiplier));
         setFormRetailPrice(String(editingStockItem.retailPrice * multiplier));
@@ -274,6 +373,56 @@ export default function App() {
         setFormSubRetailPrice(editingStockItem.subUnitRetailPrice !== undefined ? String(editingStockItem.subUnitRetailPrice * multiplier) : '');
         setFormSubWholesalePrice(editingStockItem.subUnitWholesalePrice !== undefined ? String(editingStockItem.subUnitWholesalePrice * multiplier) : '');
         setFormSubPartnerPrice(editingStockItem.subUnitPartnerPrice !== undefined ? String(editingStockItem.subUnitPartnerPrice * multiplier) : '');
+
+        companies.forEach(comp => {
+          const cp = editingStockItem.companyPrices?.[comp.id];
+          if (cp) {
+            initialPrices[comp.id] = {
+              purchasePrice: String(cp.purchasePrice * multiplier),
+              retailPrice: String(cp.retailPrice * multiplier),
+              wholesalePrice: String(cp.wholesalePrice * multiplier),
+              partnerPrice: String((cp.partnerPrice ?? cp.retailPrice) * multiplier),
+              subUnitRetailPrice: cp.subUnitRetailPrice !== undefined ? String(cp.subUnitRetailPrice * multiplier) : '',
+              subUnitWholesalePrice: cp.subUnitWholesalePrice !== undefined ? String(cp.subUnitWholesalePrice * multiplier) : '',
+              subUnitPartnerPrice: cp.subUnitPartnerPrice !== undefined ? String(cp.subUnitPartnerPrice * multiplier) : '',
+            };
+          } else {
+            initialPrices[comp.id] = {
+              purchasePrice: String(editingStockItem.purchasePrice * multiplier),
+              retailPrice: String(editingStockItem.retailPrice * multiplier),
+              wholesalePrice: String(editingStockItem.wholesalePrice * multiplier),
+              partnerPrice: String((editingStockItem.partnerPrice ?? editingStockItem.retailPrice) * multiplier),
+              subUnitRetailPrice: editingStockItem.subUnitRetailPrice !== undefined ? String(editingStockItem.subUnitRetailPrice * multiplier) : '',
+              subUnitWholesalePrice: editingStockItem.subUnitWholesalePrice !== undefined ? String(editingStockItem.subUnitWholesalePrice * multiplier) : '',
+              subUnitPartnerPrice: editingStockItem.subUnitPartnerPrice !== undefined ? String(editingStockItem.subUnitPartnerPrice * multiplier) : '',
+            };
+          }
+        });
+
+        stores.forEach(st => {
+          const sp = editingStockItem.storePrices?.[st.id];
+          if (sp) {
+            initialStorePrices[st.id] = {
+              purchasePrice: String(sp.purchasePrice * multiplier),
+              retailPrice: String(sp.retailPrice * multiplier),
+              wholesalePrice: String(sp.wholesalePrice * multiplier),
+              partnerPrice: String((sp.partnerPrice ?? sp.retailPrice) * multiplier),
+              subUnitRetailPrice: sp.subUnitRetailPrice !== undefined ? String(sp.subUnitRetailPrice * multiplier) : '',
+              subUnitWholesalePrice: sp.subUnitWholesalePrice !== undefined ? String(sp.subUnitWholesalePrice * multiplier) : '',
+              subUnitPartnerPrice: sp.subUnitPartnerPrice !== undefined ? String(sp.subUnitPartnerPrice * multiplier) : '',
+            };
+          } else {
+            initialStorePrices[st.id] = {
+              purchasePrice: String(editingStockItem.purchasePrice * multiplier),
+              retailPrice: String(editingStockItem.retailPrice * multiplier),
+              wholesalePrice: String(editingStockItem.wholesalePrice * multiplier),
+              partnerPrice: String((editingStockItem.partnerPrice ?? editingStockItem.retailPrice) * multiplier),
+              subUnitRetailPrice: editingStockItem.subUnitRetailPrice !== undefined ? String(editingStockItem.subUnitRetailPrice * multiplier) : '',
+              subUnitWholesalePrice: editingStockItem.subUnitWholesalePrice !== undefined ? String(editingStockItem.subUnitWholesalePrice * multiplier) : '',
+              subUnitPartnerPrice: editingStockItem.subUnitPartnerPrice !== undefined ? String(editingStockItem.subUnitPartnerPrice * multiplier) : '',
+            };
+          }
+        });
       } else {
         setFormPurchasePrice('');
         setFormRetailPrice('');
@@ -283,9 +432,35 @@ export default function App() {
         setFormSubRetailPrice('');
         setFormSubWholesalePrice('');
         setFormSubPartnerPrice('');
+
+        companies.forEach(comp => {
+          initialPrices[comp.id] = {
+            purchasePrice: '',
+            retailPrice: '',
+            wholesalePrice: '',
+            partnerPrice: '',
+            subUnitRetailPrice: '',
+            subUnitWholesalePrice: '',
+            subUnitPartnerPrice: '',
+          };
+        });
+
+        stores.forEach(st => {
+          initialStorePrices[st.id] = {
+            purchasePrice: '',
+            retailPrice: '',
+            wholesalePrice: '',
+            partnerPrice: '',
+            subUnitRetailPrice: '',
+            subUnitWholesalePrice: '',
+            subUnitPartnerPrice: '',
+          };
+        });
       }
+      setCompanyPricingInput(initialPrices);
+      setStorePricingInput(initialStorePrices);
     }
-  }, [showStockModal, editingStockItem, settings.currency, settings.exchangeRate]);
+  }, [showStockModal, editingStockItem, activeCurrency, activeExchangeRate, companies, stores]);
 
   const handleMainPriceChange = (field: 'purchase' | 'retail' | 'wholesale' | 'partner', value: string) => {
     if (field === 'purchase') setFormPurchasePrice(value);
@@ -1954,6 +2129,16 @@ export default function App() {
   }, [currentUser, currentCompanyId, companies]);
 
   // Restrict accessible stores based on soft-deletion, active company selection, and user assignment permissions
+  const visibleCompanies = useMemo(() => {
+    let result = companies.filter(c => !c.isDeleted);
+    if (currentUser && currentUser.role !== 'Super Admin') {
+      result = result.filter(c => c.id === currentUser.companyId);
+    } else if (currentCompanyId) {
+      result = result.filter(c => c.id === currentCompanyId);
+    }
+    return result;
+  }, [companies, currentCompanyId, currentUser]);
+
   const visibleStores = useMemo(() => {
     let result = stores.filter(s => !s.isDeleted);
     
@@ -2112,7 +2297,7 @@ export default function App() {
     
     return pages;
   }, [currentUser, rolePermissions]);
-  const t = (text: string) => translate(text, settings.language);
+  const t = (text: string) => translate(text, activeLanguage);
 
   // Helper variables for data fetching
   const getStoreName = (id: number) => stores.find(s => s.id === id)?.name || `Store #${id}`;
@@ -2350,7 +2535,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL INVENTORY VALUE')}</span>
               <span className="text-[26px] font-black text-gray-900 leading-tight">
-                {formatMoney(totalStockValue, settings.currency, settings.exchangeRate)}
+                {formatMoney(totalStockValue, activeCurrency, activeExchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Active store level valuation')}</span>
             </div>
@@ -2376,7 +2561,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t("TODAY'S TURNOVER")}</span>
               <span className="text-[26px] font-black text-emerald-600 leading-tight">
-                {formatMoney(todaySalesAmt, settings.currency, settings.exchangeRate)}
+                {formatMoney(todaySalesAmt, activeCurrency, activeExchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">
                 {t('Completed checkout registers')}
@@ -2391,7 +2576,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t("TODAY'S PURCHASES")}</span>
               <span className="text-[26px] font-black text-purple-600 leading-tight">
-                {formatMoney(todayPurchasesAmt, settings.currency, settings.exchangeRate)}
+                {formatMoney(todayPurchasesAmt, activeCurrency, activeExchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Received PO invoices')}</span>
             </div>
@@ -2404,7 +2589,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL RECEIVABLES')}</span>
               <span className="text-[26px] font-black text-amber-600 leading-tight">
-                {formatMoney(receivables, settings.currency, settings.exchangeRate)}
+                {formatMoney(receivables, activeCurrency, activeExchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Customer outstanding ledger balances')}</span>
             </div>
@@ -2417,7 +2602,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold text-gray-400 block uppercase tracking-wider mb-1">{t('TOTAL PAYABLES')}</span>
               <span className="text-[26px] font-black text-indigo-600 leading-tight">
-                {formatMoney(payables, settings.currency, settings.exchangeRate)}
+                {formatMoney(payables, activeCurrency, activeExchangeRate)}
               </span>
               <span className="text-xs text-gray-400 block mt-2 font-semibold">{t('Unresolved supplier invoices')}</span>
             </div>
@@ -2490,7 +2675,7 @@ export default function App() {
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value: number) => formatMoney(value, settings.currency, settings.exchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
+                      <Tooltip formatter={(value: number) => formatMoney(value, activeCurrency, activeExchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
                       <Legend verticalAlign="bottom" height={40} iconType="circle" layout="horizontal" align="center" wrapperStyle={{ fontSize: '10px' }} />
                     </PieChart>
                   </ResponsiveContainer>
@@ -2519,7 +2704,7 @@ export default function App() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
                   <YAxis tickLine={false} axisLine={false} tick={{ fill: '#94a3b8' }} />
-                  <Tooltip formatter={(value: number) => formatMoney(value, settings.currency, settings.exchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
+                  <Tooltip formatter={(value: number) => formatMoney(value, activeCurrency, activeExchangeRate)} contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '12px', color: '#fff' }} />
                   <Bar dataKey="value" name={t('Asset Valuation')} radius={[6, 6, 0, 0]}>
                     {topProductsStockValue.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
@@ -2555,7 +2740,7 @@ export default function App() {
                         <td className="px-6 py-3.5 font-semibold text-gray-900">{getCustomerName(so.customerId)}</td>
                         <td className="px-6 py-3.5 text-gray-500">{so.date}</td>
                         <td className="px-6 py-3.5 text-right font-bold text-gray-900">
-                          {formatMoney(so.total, settings.currency, settings.exchangeRate)}
+                          {formatMoney(so.total, activeCurrency, activeExchangeRate)}
                         </td>
                       </tr>
                     ))}
@@ -2785,10 +2970,10 @@ export default function App() {
         });
         
         tableHtml += `
-            <td style="text-align: right; padding: 8px;">${formatMoney(p.purchasePrice, settings.currency, settings.exchangeRate)}</td>
-            <td style="text-align: right; color: #2563eb; padding: 8px;">${formatMoney(p.retailPrice, settings.currency, settings.exchangeRate)}</td>
-            <td style="text-align: right; color: #d97706; padding: 8px;">${formatMoney(p.wholesalePrice, settings.currency, settings.exchangeRate)}</td>
-            <td style="text-align: right; font-weight: bold; background-color: #f0fdf4; color: #15803d; padding: 8px;">${formatMoney(totalValue, settings.currency, settings.exchangeRate)}</td>
+            <td style="text-align: right; padding: 8px;">${formatMoney(p.purchasePrice, activeCurrency, activeExchangeRate)}</td>
+            <td style="text-align: right; color: #2563eb; padding: 8px;">${formatMoney(p.retailPrice, activeCurrency, activeExchangeRate)}</td>
+            <td style="text-align: right; color: #d97706; padding: 8px;">${formatMoney(p.wholesalePrice, activeCurrency, activeExchangeRate)}</td>
+            <td style="text-align: right; font-weight: bold; background-color: #f0fdf4; color: #15803d; padding: 8px;">${formatMoney(totalValue, activeCurrency, activeExchangeRate)}</td>
           </tr>
         `;
       });
@@ -2824,7 +3009,7 @@ export default function App() {
       
       tableHtml += `
               <td colspan="3"></td>
-              <td style="text-align: right; color: #15803d; padding: 10px;">${formatMoney(grandTotalValue, settings.currency, settings.exchangeRate)}</td>
+              <td style="text-align: right; color: #15803d; padding: 10px;">${formatMoney(grandTotalValue, activeCurrency, activeExchangeRate)}</td>
             </tr>
           </tbody>
         </table>
@@ -2978,7 +3163,7 @@ export default function App() {
                         <div className="flex flex-wrap gap-1.5">
                           {aiResponse.actions.map((act: any, idx: number) => (
                             <span key={idx} className="bg-brand/5 text-brand px-2 py-0.5 rounded text-[10px] font-bold">
-                              {act.productName}: {act.qty} {act.unitType === 'sub' ? 'loose' : 'package'} ({formatMoney(act.total, settings.currency, settings.exchangeRate)})
+                              {act.productName}: {act.qty} {act.unitType === 'sub' ? 'loose' : 'package'} ({formatMoney(act.total, activeCurrency, activeExchangeRate)})
                             </span>
                           ))}
                         </div>
@@ -3089,6 +3274,7 @@ export default function App() {
                   ))}
                   <th className="px-4 py-3 text-right">{t('Cost Price')}</th>
                   <th className="px-4 py-3 text-right">{t('Retail price')}</th>
+                  <th className="px-4 py-3 text-right text-emerald-600 font-bold">{t('Unit Profit')}</th>
                   <th className="px-4 py-3 text-right">{t('Wholesale price')}</th>
                   <th className="px-4 py-3 text-right text-indigo-600">{t('Partner Price')}</th>
                   <th className="px-4 py-3 text-right text-indigo-700">{t('Total Value')}</th>
@@ -3136,6 +3322,23 @@ export default function App() {
                             <span className="font-bold text-gray-900 block">{p.name}</span>
                             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                               <span className="text-[10px] font-mono text-gray-400 uppercase">{p.code}</span>
+                              {(() => {
+                                const currentStore = currentStoreId || 1;
+                                const activeBatches = p.batches?.[currentStore]?.filter(b => b.qty > 0) || [];
+                                if (activeBatches.length > 0) {
+                                  return (
+                                    <span
+                                      onClick={() => setFifoBatchProduct(p)}
+                                      className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-extrabold border border-purple-200 cursor-pointer hover:bg-purple-200 transition"
+                                      title={t('Active FIFO Queued Batches - Click to Inspect')}
+                                    >
+                                      <Layers className="w-2.5 h-2.5 text-purple-600 shrink-0" />
+                                      FIFO ({activeBatches.length} {activeBatches.length === 1 ? t('batch') : t('batches')})
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                               {(() => {
                                 const expiriesToRender: { storeId?: number; storeName?: string; date: string }[] = [];
                                 if (storeId) {
@@ -3204,16 +3407,35 @@ export default function App() {
                             </td>
                           );
                         })}
-                        <td className="px-4 py-3 text-right text-gray-500">{formatMoney(p.purchasePrice, settings.currency, settings.exchangeRate)}</td>
-                        <td className="px-4 py-3 text-right text-blue-600">{formatMoney(p.retailPrice, settings.currency, settings.exchangeRate)}</td>
-                        <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, settings.currency, settings.exchangeRate)}</td>
-                        <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, settings.currency, settings.exchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-gray-500">{formatMoney(p.purchasePrice, activeCurrency, activeExchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-blue-600">{formatMoney(p.retailPrice, activeCurrency, activeExchangeRate)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-emerald-600 bg-emerald-50/40">
+                          {(() => {
+                            const unitProfit = p.retailPrice - p.purchasePrice;
+                            const marginPct = p.retailPrice > 0 ? ((unitProfit / p.retailPrice) * 100).toFixed(0) : '0';
+                            return (
+                              <span>
+                                {unitProfit >= 0 ? '+' : ''}{formatMoney(unitProfit, activeCurrency, activeExchangeRate)}
+                                <span className="text-[9px] block text-emerald-700 font-normal">({marginPct}% margin)</span>
+                              </span>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, activeCurrency, activeExchangeRate)}</td>
+                        <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, activeCurrency, activeExchangeRate)}</td>
                         <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50/20">
-                          {formatMoney(globalStock * p.purchasePrice, settings.currency, settings.exchangeRate)}
+                          {formatMoney(globalStock * p.purchasePrice, activeCurrency, activeExchangeRate)}
                         </td>
                         {!isRetailer && (
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1.5 justify-end">
+                              <button
+                                onClick={() => setFifoBatchProduct(p)}
+                                className="p-1 hover:bg-gray-100 rounded text-purple-600"
+                                title="View FIFO Batches & Stock Valuation"
+                              >
+                                <Layers className="w-3.5 h-3.5" />
+                              </button>
                               <button
                                 onClick={() => { setTransferProductId(p.id); setShowTransferModal(true); }}
                                 className="p-1 hover:bg-gray-100 rounded text-gray-500"
@@ -3333,22 +3555,22 @@ export default function App() {
                                   <div className="space-y-2.5">
                                     <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
                                       <span className="text-gray-500">{t('Loose Retail Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
-                                      <span className="font-bold text-blue-600">{formatMoney(p.subUnitRetailPrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                      <span className="font-bold text-blue-600">{formatMoney(p.subUnitRetailPrice || 0, activeCurrency, activeExchangeRate)}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
                                       <span className="text-gray-500">{t('Loose Wholesale Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
-                                      <span className="font-bold text-amber-600">{formatMoney(p.subUnitWholesalePrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                      <span className="font-bold text-amber-600">{formatMoney(p.subUnitWholesalePrice || 0, activeCurrency, activeExchangeRate)}</span>
                                     </div>
                                     {p.subUnitPartnerPrice && (
                                       <div className="flex justify-between items-center text-[11px] font-semibold py-1.5 border-b border-gray-100">
                                         <span className="text-gray-500">{t('Loose Partner Price')} ({t('per')} {p.subUnitName || 'pc'})</span>
-                                        <span className="font-bold text-indigo-600">{formatMoney(p.subUnitPartnerPrice || 0, settings.currency, settings.exchangeRate)}</span>
+                                        <span className="font-bold text-indigo-600">{formatMoney(p.subUnitPartnerPrice || 0, activeCurrency, activeExchangeRate)}</span>
                                       </div>
                                     )}
                                     <div className="flex justify-between items-center text-[11px] font-semibold py-1.5">
                                       <span className="text-gray-500">{t('Implied Bulk Value')} ({t('calculated')})</span>
                                       <span className="font-black text-gray-900">
-                                        {formatMoney((p.subUnitRetailPrice || 0) * (p.subUnitConversion || 1), settings.currency, settings.exchangeRate)}
+                                        {formatMoney((p.subUnitRetailPrice || 0) * (p.subUnitConversion || 1), activeCurrency, activeExchangeRate)}
                                       </span>
                                     </div>
                                   </div>
@@ -3588,7 +3810,7 @@ export default function App() {
                       {po.items.map(i => `${getProductName(i.productId)} (x${i.qty})`).join(', ')}
                     </td>
                     <td className="p-3 text-right font-bold text-gray-900">
-                      {formatMoney(po.total, settings.currency, settings.exchangeRate)}
+                      {formatMoney(po.total, activeCurrency, activeExchangeRate)}
                     </td>
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -3706,10 +3928,10 @@ export default function App() {
                       {so.items.map(i => `${getProductName(i.productId)} (x${i.qty})`).join(', ')}
                     </td>
                     <td className="p-3 text-right font-bold text-gray-900">
-                      {formatMoney(so.total, settings.currency, settings.exchangeRate)}
+                      {formatMoney(so.total, activeCurrency, activeExchangeRate)}
                     </td>
                     <td className="p-3 text-right font-bold text-emerald-600">
-                      {formatMoney(so.profit, settings.currency, settings.exchangeRate)}
+                      {formatMoney(so.profit, activeCurrency, activeExchangeRate)}
                     </td>
                     <td className="p-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
@@ -3721,9 +3943,9 @@ export default function App() {
                               store: stores.find(s => s.id === so.storeId) || null,
                               stockItems,
                               currentUser,
-                              currency: settings.currency,
-                              exchangeRate: settings.exchangeRate,
-                              language: settings.language,
+                              currency: activeCurrency,
+                              exchangeRate: activeExchangeRate,
+                              language: activeLanguage,
                               companyDetails: {
                                 name: localStorage.getItem('tradecore_receipt_company_name') || 'Singida Grain Millers Ltd',
                                 branch: localStorage.getItem('tradecore_receipt_company_branch') || 'Central Depot, Singida-Dodoma Rd',
@@ -3823,9 +4045,32 @@ export default function App() {
             expenses={activeExpenses}
             stockItems={activeStockItems}
             stores={stores}
+            companies={companies}
+            branches={branches}
+            currentCompanyId={currentCompanyId}
+            currentBranchId={currentBranchId}
             currentStoreId={currentStoreId}
             currency={activeCurrency}
             exchangeRate={activeExchangeRate}
+          />
+        );
+      case 'ai-copilot':
+        return (
+          <AICopilot
+            currentUser={currentUser}
+            currentCompanyId={currentCompanyId}
+            companies={companies}
+            branches={branches}
+            stores={stores}
+            stockItems={stockItems}
+            salesOrders={salesOrders}
+            purchaseOrders={purchaseOrders}
+            expenses={expenses}
+            customers={customers}
+            suppliers={suppliers}
+            currency={activeCurrency}
+            exchangeRate={activeExchangeRate}
+            translate={t}
           />
         );
       case 'companies':
@@ -3902,7 +4147,11 @@ export default function App() {
             customers={customers}
             suppliers={suppliers}
             stores={stores}
+            companies={companies}
+            branches={branches}
             expenses={expenses}
+            currentCompanyId={currentCompanyId}
+            currentBranchId={currentBranchId}
             currentStoreId={currentStoreId}
             currency={activeCurrency}
             exchangeRate={activeExchangeRate}
@@ -4147,9 +4396,11 @@ export default function App() {
           allowedPages={allowedPages}
           onNavigate={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }}
           onLogout={handleLogout}
+          onOpenSettings={() => setShowSettingsModal(true)}
           lowStockCount={lowStockCount}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={handleToggleSidebarCollapsed}
+          language={activeLanguage}
         />
       </div>
 
@@ -4165,7 +4416,9 @@ export default function App() {
               allowedPages={allowedPages}
               onNavigate={(page) => { setCurrentPage(page); setMobileSidebarOpen(false); }}
               onLogout={handleLogout}
+              onOpenSettings={() => { setShowSettingsModal(true); setMobileSidebarOpen(false); }}
               lowStockCount={lowStockCount}
+              language={activeLanguage}
             />
           </div>
         </div>
@@ -4189,6 +4442,13 @@ export default function App() {
           pageTitle={currentPage}
           theme={theme}
           onToggleTheme={handleToggleTheme}
+          onOpenGame={() => {
+            if (currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin' || settings.allowGamesEnabled !== false) {
+              setShowGameModal(true);
+            } else {
+              toast.info('Mind Refresh Game Breaks are currently disabled by Admin.');
+            }
+          }}
         />
 
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 scrollbar-thin">
@@ -4242,123 +4502,269 @@ export default function App() {
       )}
 
       {/* System Settings modal */}
-      {showSettingsModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
-            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50">
-              <span className="font-bold text-gray-900 text-sm">ERP Core Settings</span>
-              <button onClick={() => setShowSettingsModal(false)} className="p-1 hover:bg-gray-200 rounded">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Display Language</label>
-                <select
-                  value={settings.language}
-                  onChange={(e) => saveAllData({ settings: { ...settings, language: e.target.value as 'en' | 'sw' } })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm bg-white font-medium"
-                >
-                  <option value="en">English (default)</option>
-                  <option value="sw">Kiswahili (Glossary)</option>
-                </select>
-              </div>
+      {showSettingsModal && (() => {
+        const targetCompId = currentCompanyId || currentUser?.companyId || (companies.length > 0 ? companies[0].id : 1);
+        const targetCompObj = companies.find(c => c.id === targetCompId);
+        const currLang = (targetCompId && settings.companyLanguages?.[targetCompId]) || targetCompObj?.language || settings.language || 'en';
+        const currCurrency = (targetCompId && settings.companyCurrencies?.[targetCompId]) || targetCompObj?.currency || settings.currency || 'USD';
+        const currRate = (targetCompId && settings.companyExchangeRates?.[targetCompId] !== undefined)
+          ? settings.companyExchangeRates[targetCompId]
+          : (targetCompObj?.exchangeRate !== undefined ? targetCompObj.exchangeRate : (settings.exchangeRate || 1));
 
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Display Currency</label>
-                <select
-                  value={settings.currency}
-                  onChange={(e) => saveAllData({ settings: { ...settings, currency: e.target.value as any } })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm bg-white font-medium"
-                >
-                  <option value="USD">USD ($)</option>
-                  <option value="TZS">TZS (TSh)</option>
-                  <option value="KES">KES (KSh)</option>
-                  <option value="UGD">UGD (USh)</option>
-                  <option value="UGX">UGX (USh)</option>
-                  <option value="RWF">RWF (RF)</option>
-                  <option value="EUR">EUR (€)</option>
-                  <option value="GBP">GBP (£)</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Exchange conversion (1 USD = X Local Units)</label>
-                <input
-                  type="number"
-                  step="any"
-                  value={settings.exchangeRate}
-                  onChange={(e) => saveAllData({ settings: { ...settings, exchangeRate: parseFloat(e.target.value) || 1 } })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm bg-white font-mono"
-                />
-              </div>
-
-              {/* Secure Database Backup and Restore */}
-              <div className="pt-4 border-t space-y-3">
-                <span className="text-xs font-bold text-gray-700 block uppercase flex items-center gap-1.5">
-                  <Database className="w-3.5 h-3.5 text-blue-600" /> Database Backup &amp; Restore
-                </span>
-                <p className="text-[10px] text-gray-400 font-semibold leading-relaxed">
-                  Download a complete backup of all products, sales, purchases, settings, and logs to your desktop, or upload a previously saved file to restore session data.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={handleExportDatabase}
-                    className="py-2 px-3 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-xs"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-green-600" /> Export JSON
-                  </button>
-                  <label className="py-2 px-3 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition shadow-xs">
-                    <FileUp className="w-4 h-4 text-blue-600" /> Import JSON
-                    <input
-                      type="file"
-                      accept=".json"
-                      onChange={handleImportDatabase}
-                      className="hidden"
-                    />
-                  </label>
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[88vh] my-auto border border-gray-100">
+              {/* Modal Header */}
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/90 shrink-0">
+                <div className="flex items-center gap-2">
+                  <SettingsIcon className="w-5 h-5 text-gray-700" />
+                  <span className="font-bold text-gray-900 text-sm">{t('System Settings')}</span>
                 </div>
                 <button
-                  onClick={handleExportHTML}
-                  className="w-full py-2 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm"
+                  onClick={() => setShowSettingsModal(false)}
+                  type="button"
+                  className="p-1.5 hover:bg-gray-200/80 rounded-full text-gray-500 hover:text-gray-900 transition focus:outline-none"
+                  title={t('Close')}
+                  aria-label="Close"
                 >
-                  <Globe className="w-4 h-4" /> Export Interactive HTML App
+                  <X className="w-5 h-5" />
                 </button>
-                <div className="text-[9px] text-green-600 bg-green-50/50 p-2 rounded border border-green-100 font-semibold flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3 flex-shrink-0" />
-                  <span>Dynamic Auto-Saving is fully active in local storage.</span>
-                </div>
               </div>
 
-              {currentUser?.username === 'root_mandate' && (
-                <div className="pt-4 border-t space-y-3">
-                  <div>
-                    <span className="text-xs font-bold text-brand block uppercase">System State Recovery</span>
-                    <p className="text-[10px] text-gray-400 font-semibold leading-relaxed">
-                      Restore default companies, default active demo operators, initial stocks, and system metrics.
-                    </p>
-                    <button
-                      onClick={() => {
-                        if (window.confirm('Restore initial database registers? This will wipe your session changes.')) {
-                          restoreFactoryDefaults();
-                          setShowSettingsModal(false);
-                          toast.success(t('Database successfully restored! reloading window...'));
-                          setTimeout(() => {
-                            window.location.reload();
-                          }, 1500);
-                        }
-                      }}
-                      className="w-full mt-2 py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs tracking-wider uppercase transition-colors"
-                    >
-                      Restore Template DB
-                    </button>
+              {/* Scrollable Modal Content */}
+              <div className="p-5 space-y-4 overflow-y-auto flex-1 scrollbar-thin">
+                <div className="bg-indigo-50/80 border border-indigo-200 rounded-lg p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="font-bold text-indigo-950 text-xs">{t('Company Selected')}</span>
+                    </div>
+                    <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-mono font-bold">Independent Unit</span>
                   </div>
+                  {currentUser?.role === 'Super Admin' ? (
+                    companies.length > 1 ? (
+                      <select
+                        value={targetCompId}
+                        onChange={(e) => setCurrentCompanyId(Number(e.target.value))}
+                        className="w-full text-xs font-bold bg-white border border-indigo-200 rounded px-2 py-1 text-indigo-950 outline-none"
+                      >
+                        {companies.map(c => (
+                          <option key={c.id} value={c.id}>{c.name} ({c.currency || 'USD'})</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="font-bold text-indigo-950 text-xs block">{targetCompObj?.name || `Company #${targetCompId}`}</span>
+                    )
+                  ) : (
+                    <div className="bg-white border border-indigo-200 rounded p-2 text-xs font-bold text-indigo-950 space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span>{targetCompObj?.name || `Company #${targetCompId}`}</span>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded uppercase font-bold">Assigned Company</span>
+                      </div>
+                      {currentUser?.branchId && (
+                        <div className="text-[11px] text-gray-600 font-medium">
+                          Branch: {branches.find(b => b.id === currentUser.branchId)?.name || `Branch #${currentUser.branchId}`}
+                        </div>
+                      )}
+                      {currentUser?.storeId && (
+                        <div className="text-[11px] text-gray-600 font-medium">
+                          Store: {stores.find(s => s.id === currentUser.storeId)?.name || `Store #${currentUser.storeId}`}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <span className="text-[10px] text-indigo-700 block">{t('Configuring isolated currency & language preferences for this company')}</span>
                 </div>
-              )}
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-700">{t('Display Language')}</label>
+                  <select
+                    value={currLang}
+                    onChange={(e) => {
+                      const newLang = e.target.value as 'en' | 'sw' | 'fr' | 'es';
+                      const updatedCompanyLangs = { ...(settings.companyLanguages || {}) };
+                      if (targetCompId) {
+                        updatedCompanyLangs[targetCompId] = newLang;
+                      }
+                      const nextSettings = {
+                        ...settings,
+                        companyLanguages: updatedCompanyLangs,
+                        language: newLang
+                      };
+                      const updatedCompanies = targetCompId ? companies.map(c => c.id === targetCompId ? { ...c, language: newLang } : c) : companies;
+                      saveAllData({ settings: nextSettings, companies: updatedCompanies });
+                      toast.success(t('Language preference saved!'));
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-brand/20 outline-none"
+                  >
+                    <option value="en">English (default)</option>
+                    <option value="sw">Kiswahili (Swahili)</option>
+                    <option value="fr">Français (French)</option>
+                    <option value="es">Español (Spanish)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-700">{t('Display Currency')}</label>
+                  <select
+                    value={currCurrency}
+                    onChange={(e) => {
+                      const newCurr = e.target.value as any;
+                      const updatedCompanyCurrencies = { ...(settings.companyCurrencies || {}) };
+                      if (targetCompId) {
+                        updatedCompanyCurrencies[targetCompId] = newCurr;
+                      }
+                      const nextSettings = {
+                        ...settings,
+                        companyCurrencies: updatedCompanyCurrencies,
+                        currency: newCurr
+                      };
+                      const updatedCompanies = targetCompId ? companies.map(c => c.id === targetCompId ? { ...c, currency: newCurr } : c) : companies;
+                      saveAllData({ settings: nextSettings, companies: updatedCompanies });
+                      toast.success(t('Currency preference saved!'));
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white font-medium focus:ring-2 focus:ring-brand/20 outline-none"
+                  >
+                    <option value="USD">USD ($)</option>
+                    <option value="TZS">TZS (TSh)</option>
+                    <option value="KES">KES (KSh)</option>
+                    <option value="UGD">UGD (USh)</option>
+                    <option value="UGX">UGX (USh)</option>
+                    <option value="RWF">RWF (RF)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-700">{t('Exchange conversion (1 USD = X Local Units)')}</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={currRate}
+                    onChange={(e) => {
+                      const newRate = parseFloat(e.target.value) || 1;
+                      const updatedCompanyRates = { ...(settings.companyExchangeRates || {}) };
+                      if (targetCompId) {
+                        updatedCompanyRates[targetCompId] = newRate;
+                      }
+                      const nextSettings = {
+                        ...settings,
+                        companyExchangeRates: updatedCompanyRates,
+                        exchangeRate: newRate
+                      };
+                      const updatedCompanies = targetCompId ? companies.map(c => c.id === targetCompId ? { ...c, exchangeRate: newRate } : c) : companies;
+                      saveAllData({ settings: nextSettings, companies: updatedCompanies });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white font-mono focus:ring-2 focus:ring-brand/20 outline-none"
+                  />
+                </div>
+
+                {/* Mind Refresh Game Break Permission Toggle */}
+                {(currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin') && (
+                  <div className="pt-3 border-t border-gray-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-gray-800 block">🎮 Mind Refresh Game Break</span>
+                      <span className="text-[10px] text-gray-400 block">Allow operators to play arcade game by clicking user letter avatar</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.allowGamesEnabled !== false}
+                      onChange={(e) => {
+                        const nextSettings = { ...settings, allowGamesEnabled: e.target.checked };
+                        saveAllData({ settings: nextSettings });
+                        toast.success(e.target.checked ? t('Game breaks enabled for operators') : t('Game breaks disabled'));
+                      }}
+                      className="w-4 h-4 text-brand rounded border-gray-300 focus:ring-brand cursor-pointer"
+                    />
+                  </div>
+                )}
+
+                {/* Available ONLY to Founder Super Admin */}
+                {currentUser?.role === 'Super Admin' && (
+                  <>
+                    {/* Secure Database Backup and Restore */}
+                    <div className="pt-4 border-t border-gray-100 space-y-3">
+                      <span className="text-xs font-bold text-gray-700 block uppercase flex items-center gap-1.5">
+                        <Database className="w-3.5 h-3.5 text-blue-600" /> Database Backup &amp; Restore
+                      </span>
+                      <p className="text-[10px] text-gray-400 font-semibold leading-relaxed">
+                        Download a complete backup of all products, sales, purchases, settings, and logs to your desktop, or upload a previously saved file to restore session data.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={handleExportDatabase}
+                          className="py-2 px-3 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-xs"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-green-600" /> Export JSON
+                        </button>
+                        <label className="py-2 px-3 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition shadow-xs">
+                          <FileUp className="w-4 h-4 text-blue-600" /> Import JSON
+                          <input
+                            type="file"
+                            accept=".json"
+                            onChange={handleImportDatabase}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleExportHTML}
+                        className="w-full py-2 px-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm"
+                      >
+                        <Globe className="w-4 h-4" /> Export Interactive HTML App
+                      </button>
+                      <div className="text-[9px] text-green-600 bg-green-50/50 p-2 rounded border border-green-100 font-semibold flex items-center gap-1">
+                        <CheckCircle className="w-3 h-3 flex-shrink-0" />
+                        <span>Dynamic Auto-Saving is fully active in local storage.</span>
+                      </div>
+                    </div>
+
+                    {/* System State Recovery */}
+                    <div className="pt-4 border-t border-gray-100 space-y-3">
+                      <div>
+                        <span className="text-xs font-bold text-brand block uppercase">System State Recovery</span>
+                        <p className="text-[10px] text-gray-400 font-semibold leading-relaxed">
+                          Restore default companies, default active demo operators, initial stocks, and system metrics.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm('Restore initial database registers? This will wipe your session changes.')) {
+                              restoreFactoryDefaults();
+                              setShowSettingsModal(false);
+                              toast.success(t('Database successfully restored! reloading window...'));
+                              setTimeout(() => {
+                                window.location.reload();
+                              }, 1500);
+                            }
+                          }}
+                          className="w-full mt-2 py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs tracking-wider uppercase transition-colors"
+                        >
+                          Restore Template DB
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/90 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(false)}
+                  className="w-full py-2 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center justify-center gap-2"
+                >
+                  {t('Close Settings')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* POS Checkout Terminal Modal */}
       <POSModal
@@ -4375,6 +4781,8 @@ export default function App() {
         t={t}
         currentUser={currentUser}
         posShifts={posShifts}
+        currency={activeCurrency}
+        exchangeRate={activeExchangeRate}
       />
 
       {/* PO order Modal */}
@@ -4390,6 +4798,8 @@ export default function App() {
         logAction={logAction}
         settings={settings}
         t={t}
+        currency={activeCurrency}
+        exchangeRate={activeExchangeRate}
       />
 
       {/* Product Add/Edit Modal */}
@@ -4430,11 +4840,11 @@ export default function App() {
                 });
 
                 // Adjust rates if not USD (database base is USD)
-                const isUSD = settings.currency === 'USD';
-                const finalPPrice = !isUSD ? pPrice / settings.exchangeRate : pPrice;
-                const finalRPrice = !isUSD ? rPrice / settings.exchangeRate : rPrice;
-                const finalWPrice = !isUSD ? wPrice / settings.exchangeRate : wPrice;
-                const finalPartnerPrice = !isUSD ? partnerPrice / settings.exchangeRate : partnerPrice;
+                const isUSD = activeCurrency === 'USD';
+                const finalPPrice = !isUSD ? pPrice / activeExchangeRate : pPrice;
+                const finalRPrice = !isUSD ? rPrice / activeExchangeRate : rPrice;
+                const finalWPrice = !isUSD ? wPrice / activeExchangeRate : wPrice;
+                const finalPartnerPrice = !isUSD ? partnerPrice / activeExchangeRate : partnerPrice;
 
                 const useSubUnitPricing = fd.get('useSubUnitPricing') === 'on';
                 const subUnitName = fd.get('subUnitName') as string || '';
@@ -4443,15 +4853,86 @@ export default function App() {
                 const subUnitWPriceInput = parseFloat(fd.get('subUnitWholesalePrice') as string) || 0;
                 const subUnitPPriceInput = parseFloat(fd.get('subUnitPartnerPrice') as string) || 0;
 
-                const finalSubRPrice = !isUSD ? subUnitRPriceInput / settings.exchangeRate : subUnitRPriceInput;
-                const finalSubWPrice = !isUSD ? subUnitWPriceInput / settings.exchangeRate : subUnitWPriceInput;
-                const finalSubPPrice = !isUSD ? subUnitPPriceInput / settings.exchangeRate : subUnitPPriceInput;
+                const finalSubRPrice = !isUSD ? subUnitRPriceInput / activeExchangeRate : subUnitRPriceInput;
+                const finalSubWPrice = !isUSD ? subUnitWPriceInput / activeExchangeRate : subUnitWPriceInput;
+                const finalSubPPrice = !isUSD ? subUnitPPriceInput / activeExchangeRate : subUnitPPriceInput;
+
+                // Extract company pricing inputs
+                const existingCompanyPrices = editingStockItem?.companyPrices || {};
+                const processedCompanyPrices: Record<number, any> = { ...existingCompanyPrices };
+                visibleCompanies.forEach(comp => {
+                  const cInput = companyPricingInput[comp.id];
+                  if (cInput && (cInput.purchasePrice || cInput.retailPrice || cInput.wholesalePrice || cInput.partnerPrice)) {
+                    const cpP = parseFloat(cInput.purchasePrice) || 0;
+                    const crP = parseFloat(cInput.retailPrice) || 0;
+                    const cwP = parseFloat(cInput.wholesalePrice) || 0;
+                    const cPartnerP = parseFloat(cInput.partnerPrice) || 0;
+
+                    const cSubR = parseFloat(cInput.subUnitRetailPrice || '0') || 0;
+                    const cSubW = parseFloat(cInput.subUnitWholesalePrice || '0') || 0;
+                    const cSubP = parseFloat(cInput.subUnitPartnerPrice || '0') || 0;
+
+                    const compRate = getActiveExchangeRate(comp.id);
+                    const compIsUSD = getActiveCurrency(comp.id) === 'USD';
+
+                    processedCompanyPrices[comp.id] = {
+                      purchasePrice: !compIsUSD ? cpP / compRate : cpP,
+                      retailPrice: !compIsUSD ? crP / compRate : crP,
+                      wholesalePrice: !compIsUSD ? cwP / compRate : cwP,
+                      partnerPrice: !compIsUSD ? cPartnerP / compRate : cPartnerP,
+                      ...(useSubUnitPricing ? {
+                        subUnitRetailPrice: !compIsUSD ? cSubR / compRate : cSubR,
+                        subUnitWholesalePrice: !compIsUSD ? cSubW / compRate : cSubW,
+                        subUnitPartnerPrice: !compIsUSD ? cSubP / compRate : cSubP,
+                      } : {})
+                    };
+                  } else {
+                    delete processedCompanyPrices[comp.id];
+                  }
+                });
+
+                // Extract store pricing inputs
+                const existingStorePrices = editingStockItem?.storePrices || {};
+                const processedStorePrices: Record<number, any> = { ...existingStorePrices };
+                visibleStores.forEach(st => {
+                  const sInput = storePricingInput[st.id];
+                  if (sInput && (sInput.purchasePrice || sInput.retailPrice || sInput.wholesalePrice || sInput.partnerPrice)) {
+                    const stP = parseFloat(sInput.purchasePrice) || 0;
+                    const stR = parseFloat(sInput.retailPrice) || 0;
+                    const stW = parseFloat(sInput.wholesalePrice) || 0;
+                    const stPartner = parseFloat(sInput.partnerPrice) || 0;
+
+                    const stSubR = parseFloat(sInput.subUnitRetailPrice || '0') || 0;
+                    const stSubW = parseFloat(sInput.subUnitWholesalePrice || '0') || 0;
+                    const stSubP = parseFloat(sInput.subUnitPartnerPrice || '0') || 0;
+
+                    const stCompId = st.companyId || currentCompanyId || currentUser?.companyId || (companies.length > 0 ? companies[0].id : 1);
+                    const stRate = getActiveExchangeRate(stCompId);
+                    const stIsUSD = getActiveCurrency(stCompId) === 'USD';
+
+                    processedStorePrices[st.id] = {
+                      purchasePrice: !stIsUSD ? stP / stRate : stP,
+                      retailPrice: !stIsUSD ? stR / stRate : stR,
+                      wholesalePrice: !stIsUSD ? stW / stRate : stW,
+                      partnerPrice: !stIsUSD ? stPartner / stRate : stPartner,
+                      ...(useSubUnitPricing ? {
+                        subUnitRetailPrice: !stIsUSD ? stSubR / stRate : stSubR,
+                        subUnitWholesalePrice: !stIsUSD ? stSubW / stRate : stSubW,
+                        subUnitPartnerPrice: !stIsUSD ? stSubP / stRate : stSubP,
+                      } : {})
+                    };
+                  } else {
+                    delete processedStorePrices[st.id];
+                  }
+                });
 
                 if (editingStockItem) {
                   const updated = stockItems.map(p => {
                     if (p.id === editingStockItem.id) {
                       return {
-                        ...p, name, code, category: cat, unit,
+                        ...p,
+                        companyId: p.companyId || currentCompanyId || currentUser?.companyId || 1,
+                        name, code, category: cat, unit,
                         purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                         lowStockQty: lowLimit, imageUrl, expiryDate: expiryDate || undefined,
                         expiryDates: Object.keys(expiryDates).length > 0 ? expiryDates : undefined,
@@ -4460,7 +4941,9 @@ export default function App() {
                         subUnitConversion,
                         subUnitRetailPrice: finalSubRPrice,
                         subUnitWholesalePrice: finalSubWPrice,
-                        subUnitPartnerPrice: finalSubPPrice
+                        subUnitPartnerPrice: finalSubPPrice,
+                        companyPrices: Object.keys(processedCompanyPrices).length > 0 ? processedCompanyPrices : undefined,
+                        storePrices: Object.keys(processedStorePrices).length > 0 ? processedStorePrices : undefined
                       };
                     }
                     return p;
@@ -4473,8 +4956,11 @@ export default function App() {
                   const pStockObj: Record<number, number> = {};
                   stores.forEach(s => { pStockObj[s.id] = 0; });
                   
+                  const targetCompId = currentCompanyId || currentUser?.companyId || 1;
                   const newProduct: StockItem = {
-                    id: maxId + 1, name, code, category: cat, unit,
+                    id: maxId + 1,
+                    companyId: targetCompId,
+                    name, code, category: cat, unit,
                     stock: pStockObj,
                     purchasePrice: finalPPrice, retailPrice: finalRPrice, wholesalePrice: finalWPrice, partnerPrice: finalPartnerPrice,
                     lowStockQty: lowLimit, imageUrl,
@@ -4485,7 +4971,9 @@ export default function App() {
                     subUnitConversion,
                     subUnitRetailPrice: finalSubRPrice,
                     subUnitWholesalePrice: finalSubWPrice,
-                    subUnitPartnerPrice: finalSubPPrice
+                    subUnitPartnerPrice: finalSubPPrice,
+                    companyPrices: Object.keys(processedCompanyPrices).length > 0 ? processedCompanyPrices : undefined,
+                    storePrices: Object.keys(processedStorePrices).length > 0 ? processedStorePrices : undefined
                   };
                   saveAllData({ stockItems: [...stockItems, newProduct] });
                   logAction('Created Product', `Registered new inventory SKU: ${code}`);
@@ -4496,7 +4984,7 @@ export default function App() {
               className="p-5 space-y-4 overflow-y-auto"
             >
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Product Name</label>
+                <label className="text-xs font-semibold text-gray-700">{t('Product Name')}</label>
                 <input
                   type="text"
                   name="name"
@@ -4506,21 +4994,69 @@ export default function App() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-700">Product Image (URL or Upload File)</label>
-                <div className="flex gap-2">
+                <label className="text-xs font-semibold text-gray-700">{t('Product Image (URL, Upload, or Camera)')}</label>
+                <div className="flex flex-wrap sm:flex-nowrap gap-2">
                   <input
                     type="text"
                     name="imageUrl"
                     id="modal-image-url-input"
-                    placeholder="https://images.unsplash.com/..."
+                    placeholder="https://images.unsplash.com/... or snapshot"
                     defaultValue={editingStockItem?.imageUrl || ''}
-                    className="flex-1 px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none"
+                    className="flex-1 min-w-[160px] px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none"
                   />
-                  <label className="bg-gray-100 hover:bg-gray-200 border cursor-pointer text-gray-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center transition whitespace-nowrap">
-                    Upload
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        setShowCameraCaptureModal(true);
+                        const stream = await navigator.mediaDevices.getUserMedia({
+                          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                        });
+                        setCameraStream(stream);
+                        setTimeout(() => {
+                          if (cameraVideoRef.current) {
+                            cameraVideoRef.current.srcObject = stream;
+                          }
+                        }, 100);
+                      } catch (err: any) {
+                        toast.error(t('Unable to access device camera. Check permissions or upload an image file.'));
+                        setShowCameraCaptureModal(false);
+                      }
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap shadow-xs"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-white" />
+                    {t('Camera')}
+                  </button>
+                  <label className="bg-gray-100 hover:bg-gray-200 border cursor-pointer text-gray-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition whitespace-nowrap">
+                    {t('Upload')}
                     <input
                       type="file"
                       accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            if (event.target?.result) {
+                              const input = document.getElementById('modal-image-url-input') as HTMLInputElement;
+                              if (input) {
+                                input.value = event.target.result as string;
+                              }
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 cursor-pointer px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition whitespace-nowrap sm:hidden">
+                    📸 {t('Snap')}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -4584,6 +5120,12 @@ export default function App() {
                   <option value="Roll">Roll (Roll)</option>
                   <option value="Gallon">Gallon (Gal)</option>
                   <option value="Pallet">Pallet (Plt)</option>
+                  <option value="Ton">Metric Ton (Ton)</option>
+                  <option value="Container">Container (Ctr)</option>
+                  <option value="Barrel">Barrel (Brl)</option>
+                  <option value="Drum">Drum (Drm)</option>
+                  <option value="Bale">Bale (Ble)</option>
+                  <option value="Tray">Tray (Try)</option>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -4610,25 +5152,10 @@ export default function App() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
-                    {t('Retail Price')}
-                    {getMarginText(formRetailPrice, formPurchasePrice)}
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    name="retailPrice"
-                    required
-                    value={formRetailPrice}
-                    onChange={(e) => handleMainPriceChange('retail', e.target.value)}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
-                    {t('Wholesale Price')}
+                  <label className="text-xs font-semibold text-gray-700 flex flex-wrap items-center">
+                    {t('Global Base Selling / Wholesale Price')}
                     {getMarginText(formWholesalePrice, formPurchasePrice)}
                   </label>
                   <input
@@ -4637,26 +5164,51 @@ export default function App() {
                     name="wholesalePrice"
                     required
                     value={formWholesalePrice}
-                    onChange={(e) => handleMainPriceChange('wholesale', e.target.value)}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
+                    onChange={(e) => {
+                      handleMainPriceChange('wholesale', e.target.value);
+                      if (!formRetailPrice) handleMainPriceChange('retail', e.target.value);
+                      if (!formPartnerPrice) handleMainPriceChange('partner', e.target.value);
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
                   />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-gray-700 flex flex-wrap items-center">
-                    {t('Partner Price')}
-                    {getMarginText(formPartnerPrice, formPurchasePrice)}
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    name="partnerPrice"
-                    required
-                    value={formPartnerPrice}
-                    onChange={(e) => handleMainPriceChange('partner', e.target.value)}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white outline-none font-mono"
-                  />
+                  {/* Hidden inputs for global retail and partner prices if not specified per company/store */}
+                  <input type="hidden" name="retailPrice" value={formRetailPrice || formWholesalePrice || '0'} />
+                  <input type="hidden" name="partnerPrice" value={formPartnerPrice || formWholesalePrice || '0'} />
                 </div>
               </div>
+
+              {/* Live Profit Calculation Preview */}
+              {(() => {
+                const costVal = parseFloat(formPurchasePrice || '0') || 0;
+                const retailVal = parseFloat(formWholesalePrice || formRetailPrice || '0') || 0;
+                if (costVal > 0 && retailVal > 0) {
+                  const unitProfit = retailVal - costVal;
+                  const marginPct = ((unitProfit / retailVal) * 100).toFixed(1);
+                  const markupPct = ((unitProfit / costVal) * 100).toFixed(1);
+                  const isProfitable = unitProfit >= 0;
+                  return (
+                    <div className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs font-semibold ${
+                      isProfitable ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950' : 'bg-red-50/80 border-red-200 text-red-950'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <TrendingUp className={`w-4 h-4 shrink-0 ${isProfitable ? 'text-emerald-600' : 'text-red-600'}`} />
+                        <span>
+                          <strong>Estimated Unit Profit:</strong> {isProfitable ? '+' : ''}{formatMoney(unitProfit, activeCurrency, activeExchangeRate)} / unit
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] font-mono">
+                        <span className="bg-white px-2 py-0.5 rounded border border-emerald-200 shadow-2xs">
+                          Margin: {marginPct}%
+                        </span>
+                        <span className="bg-white px-2 py-0.5 rounded border border-emerald-200 shadow-2xs">
+                          Markup: {markupPct}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               {/* Fractional Sub-Unit Pricing Section */}
               <div className="border border-brand/20 bg-brand/5 rounded-xl p-3 space-y-3">
@@ -4749,6 +5301,362 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {/* Multi-Company Price Setup */}
+              {visibleCompanies.length > 0 && (
+                <div className="border border-indigo-200 bg-indigo-50/40 rounded-xl p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4 text-indigo-600" />
+                      <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">
+                        Company-Specific Pricing Overrides
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">
+                      {visibleCompanies.length} {t('Companies')}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-600">
+                    Set specific Purchase and Selling prices per company/entity. If left blank, default global pricing above will apply.
+                  </p>
+
+                  <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin">
+                    {visibleCompanies.map(comp => {
+                      const cVal = companyPricingInput[comp.id] || {
+                        purchasePrice: '',
+                        retailPrice: '',
+                        wholesalePrice: '',
+                        partnerPrice: '',
+                        subUnitRetailPrice: '',
+                        subUnitWholesalePrice: '',
+                        subUnitPartnerPrice: ''
+                      };
+
+                      return (
+                        <div key={comp.id} className="bg-white rounded-lg border border-indigo-100 p-2.5 space-y-2 shadow-2xs">
+                          <div className="flex justify-between items-center bg-indigo-50/80 px-2 py-1 rounded border border-indigo-100">
+                            <span className="font-extrabold text-xs text-indigo-950">{comp.name}</span>
+                            <span className="text-[9px] font-bold text-indigo-600 bg-white px-1.5 py-0.5 rounded border border-indigo-200">
+                              {comp.code || 'MAIN'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-gray-500 uppercase">{t('Purchase')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formPurchasePrice || '0'}
+                                value={cVal.purchasePrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCompanyPricingInput(prev => ({
+                                    ...prev,
+                                    [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), purchasePrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-indigo-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-blue-600 uppercase">{t('Retail')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formRetailPrice || '0'}
+                                value={cVal.retailPrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCompanyPricingInput(prev => ({
+                                    ...prev,
+                                    [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), retailPrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-indigo-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-amber-600 uppercase">{t('Wholesale')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formWholesalePrice || '0'}
+                                value={cVal.wholesalePrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCompanyPricingInput(prev => ({
+                                    ...prev,
+                                    [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), wholesalePrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-indigo-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-indigo-600 uppercase">{t('Partner')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formPartnerPrice || '0'}
+                                value={cVal.partnerPrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCompanyPricingInput(prev => ({
+                                    ...prev,
+                                    [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), partnerPrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-indigo-500 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          {formUseSubUnit && (
+                            <div className="pt-1.5 border-t border-indigo-100">
+                              <span className="text-[9px] font-bold text-indigo-600 uppercase block mb-1">Sub-unit Company Pricing</span>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Retail</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubRetailPrice || '0'}
+                                    value={cVal.subUnitRetailPrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setCompanyPricingInput(prev => ({
+                                        ...prev,
+                                        [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitRetailPrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Wholesale</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubWholesalePrice || '0'}
+                                    value={cVal.subUnitWholesalePrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setCompanyPricingInput(prev => ({
+                                        ...prev,
+                                        [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitWholesalePrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Partner</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubPartnerPrice || '0'}
+                                    value={cVal.subUnitPartnerPrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setCompanyPricingInput(prev => ({
+                                        ...prev,
+                                        [comp.id]: { ...(prev[comp.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitPartnerPrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Branch/Store-Specific Price Setup */}
+              {visibleStores.length > 0 && (
+                <div className="border border-emerald-200 bg-emerald-50/40 rounded-xl p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <StoreIcon className="w-4 h-4 text-emerald-600" />
+                      <span className="text-xs font-bold text-emerald-900 uppercase tracking-wider">
+                        Branch/Store-Specific Pricing Overrides
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">
+                      {visibleStores.length} {t('Stores')}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-600">
+                    Set store-specific purchase and sales prices for each branch or shop location. These take top precedence over company and global prices.
+                  </p>
+
+                  <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin">
+                    {visibleStores.map(st => {
+                      const stVal = storePricingInput[st.id] || {
+                        purchasePrice: '',
+                        retailPrice: '',
+                        wholesalePrice: '',
+                        partnerPrice: '',
+                        subUnitRetailPrice: '',
+                        subUnitWholesalePrice: '',
+                        subUnitPartnerPrice: ''
+                      };
+
+                      return (
+                        <div key={st.id} className="bg-white rounded-lg border border-emerald-100 p-2.5 space-y-2 shadow-2xs">
+                          <div className="flex justify-between items-center bg-emerald-50/80 px-2 py-1 rounded border border-emerald-100">
+                            <span className="font-extrabold text-xs text-emerald-950">{st.name}</span>
+                            <span className="text-[9px] font-bold text-emerald-700 bg-white px-1.5 py-0.5 rounded border border-emerald-200">
+                              {st.code || `STORE #${st.id}`}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-4 gap-1.5">
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-gray-500 uppercase">{t('Store Purchase')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formPurchasePrice || '0'}
+                                value={stVal.purchasePrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setStorePricingInput(prev => ({
+                                    ...prev,
+                                    [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), purchasePrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-emerald-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-blue-600 uppercase">{t('Store Retail')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formRetailPrice || '0'}
+                                value={stVal.retailPrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setStorePricingInput(prev => ({
+                                    ...prev,
+                                    [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), retailPrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-emerald-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-amber-600 uppercase">{t('Store Wholesale')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formWholesalePrice || '0'}
+                                value={stVal.wholesalePrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setStorePricingInput(prev => ({
+                                    ...prev,
+                                    [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), wholesalePrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-emerald-500 font-mono"
+                              />
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <label className="text-[9px] font-bold text-indigo-600 uppercase">{t('Store Partner')}</label>
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder={formPartnerPrice || '0'}
+                                value={stVal.partnerPrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setStorePricingInput(prev => ({
+                                    ...prev,
+                                    [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), partnerPrice: val }
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs outline-none focus:border-emerald-500 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          {formUseSubUnit && (
+                            <div className="pt-1.5 border-t border-emerald-100">
+                              <span className="text-[9px] font-bold text-emerald-700 uppercase block mb-1">Sub-unit Store Pricing</span>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Retail</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubRetailPrice || '0'}
+                                    value={stVal.subUnitRetailPrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setStorePricingInput(prev => ({
+                                        ...prev,
+                                        [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitRetailPrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Wholesale</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubWholesalePrice || '0'}
+                                    value={stVal.subUnitWholesalePrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setStorePricingInput(prev => ({
+                                        ...prev,
+                                        [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitWholesalePrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <label className="text-[8px] font-bold text-gray-500 uppercase">Sub Partner</label>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    placeholder={formSubPartnerPrice || '0'}
+                                    value={stVal.subUnitPartnerPrice}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setStorePricingInput(prev => ({
+                                        ...prev,
+                                        [st.id]: { ...(prev[st.id] || { purchasePrice: '', retailPrice: '', wholesalePrice: '', partnerPrice: '', subUnitRetailPrice: '', subUnitWholesalePrice: '', subUnitPartnerPrice: '' }), subUnitPartnerPrice: val }
+                                      }));
+                                    }}
+                                    className="w-full px-1.5 py-0.5 border border-gray-300 rounded text-[11px] outline-none font-mono"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-700">Default Expiry Date (Optional)</label>
                 <input
@@ -4929,6 +5837,274 @@ export default function App() {
         onConfirm={confirmModal.onConfirm}
         title={confirmModal.title}
         description={confirmModal.description}
+      />
+
+      {/* Live Camera Capture Modal */}
+      {showCameraCaptureModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-900 text-white">
+              <div className="flex items-center gap-2">
+                <Camera className="w-5 h-5 text-emerald-400" />
+                <span className="font-bold text-sm">{t('Capture Product Photo')}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (cameraStream) {
+                    cameraStream.getTracks().forEach(track => track.stop());
+                    setCameraStream(null);
+                  }
+                  setShowCameraCaptureModal(false);
+                }}
+                className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 flex flex-col items-center bg-gray-950 space-y-4">
+              <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-gray-800 flex items-center justify-center">
+                <video
+                  ref={cameraVideoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 pointer-events-none border-2 border-emerald-500/30 rounded-xl flex items-center justify-center">
+                  <div className="w-48 h-48 border-2 border-dashed border-emerald-400/70 rounded-lg"></div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 w-full justify-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (cameraStream) {
+                      cameraStream.getTracks().forEach(track => track.stop());
+                      setCameraStream(null);
+                    }
+                    setShowCameraCaptureModal(false);
+                  }}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold transition"
+                >
+                  {t('Cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (cameraVideoRef.current) {
+                      const video = cameraVideoRef.current;
+                      const canvas = document.createElement('canvas');
+                      canvas.width = video.videoWidth || 1280;
+                      canvas.height = video.videoHeight || 720;
+                      const ctx = canvas.getContext('2d');
+                      if (ctx) {
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                        const input = document.getElementById('modal-image-url-input') as HTMLInputElement;
+                        if (input) {
+                          input.value = dataUrl;
+                        }
+                        toast.success(t('Product photo captured!'));
+                        if (cameraStream) {
+                          cameraStream.getTracks().forEach(track => track.stop());
+                          setCameraStream(null);
+                        }
+                        setShowCameraCaptureModal(false);
+                      }
+                    }
+                  }}
+                  className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg transition transform active:scale-95"
+                >
+                  <Camera className="w-4 h-4" />
+                  {t('Snap Photo')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FIFO Batch Inspector Modal */}
+      {fifoBatchProduct && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b flex items-center justify-between bg-gradient-to-r from-purple-900 to-indigo-900 text-white shrink-0">
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-purple-300" />
+                <div>
+                  <h3 className="font-bold text-sm">{t('FIFO Inventory Batch Inspector')}</h3>
+                  <span className="text-[11px] text-purple-200 block">{fifoBatchProduct.name} ({fifoBatchProduct.code})</span>
+                </div>
+              </div>
+              <button onClick={() => setFifoBatchProduct(null)} className="p-1 hover:bg-white/10 rounded-lg text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4">
+              {/* Valuation Summary Card */}
+              {(() => {
+                const targetStoreId = currentStoreId || 1;
+                const valuation = getFIFOInventoryValuation(fifoBatchProduct, targetStoreId);
+                const storeBatches = fifoBatchProduct.batches?.[targetStoreId] || [];
+
+                return (
+                  <>
+                    <div className="grid grid-cols-3 gap-3 bg-purple-50/60 border border-purple-100 rounded-xl p-3.5">
+                      <div>
+                        <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider block">{t('Total Batch Stock')}</span>
+                        <span className="text-base font-extrabold text-purple-950">
+                          {valuation.totalQty} {fifoBatchProduct.unit || 'units'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider block">{t('Avg Unit Cost')}</span>
+                        <span className="text-base font-extrabold text-purple-950">
+                          {formatMoney(valuation.averageUnitCost, activeCurrency, activeExchangeRate)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider block">{t('Total FIFO Valuation')}</span>
+                        <span className="text-base font-extrabold text-indigo-700">
+                          {formatMoney(valuation.totalValue, activeCurrency, activeExchangeRate)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+                          <Package className="w-4 h-4 text-purple-600" />
+                          {t('Active FIFO Queued Batches')} ({storeBatches.filter(b => b.qty > 0).length})
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {storeBatches.some(b => b.qty <= 0) && (
+                            <button
+                              onClick={() => {
+                                const result = cleanupEmptyBatches(fifoBatchProduct, targetStoreId);
+                                if (result.removedCount > 0) {
+                                  const updatedStockItems = activeStockItems.map(p => p.id === result.updatedProduct.id ? result.updatedProduct : p);
+                                  saveAllData({ stockItems: updatedStockItems });
+                                  setFifoBatchProduct(result.updatedProduct);
+                                  toast.success(t(`Cleaned up ${result.removedCount} empty batch record(s)!`));
+                                } else {
+                                  toast.info(t('No empty batch records found to clean up.'));
+                                }
+                              }}
+                              className="bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                              title={t('Filter out and remove completed batches where remaining quantity is zero')}
+                            >
+                              <Trash2 className="w-3 h-3 text-purple-700" />
+                              {t('Cleanup Empty Batches')}
+                            </button>
+                          )}
+                          <span className="text-[10px] font-semibold text-gray-500">
+                            {t('First In, First Out Order')}
+                          </span>
+                        </div>
+                      </div>
+
+                      {storeBatches.length === 0 ? (
+                        <div className="p-6 text-center text-gray-400 text-xs">
+                          {t('No purchase order batches logged yet. Inventory currently uses standard cost price.')}
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-gray-100/70 text-gray-500 font-bold text-[10px] uppercase">
+                              <tr>
+                                <th className="px-3 py-2.5">{t('PO / Batch Ref')}</th>
+                                <th className="px-3 py-2.5">{t('Supplier')}</th>
+                                <th className="px-3 py-2.5">{t('Rec. Date')}</th>
+                                <th className="px-3 py-2.5">{t('Expiry Date')}</th>
+                                <th className="px-3 py-2.5 text-right">{t('Unit Cost')}</th>
+                                <th className="px-3 py-2.5 text-center">{t('Rem. Qty')}</th>
+                                <th className="px-3 py-2.5 text-right">{t('Batch Value')}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 font-semibold text-gray-800">
+                              {storeBatches.map((b, idx) => {
+                                const isFirstIn = idx === 0 && b.qty > 0;
+                                return (
+                                  <tr key={b.id || idx} className={isFirstIn ? 'bg-purple-50/40' : 'hover:bg-gray-50'}>
+                                    <td className="px-3 py-2.5 font-mono text-[11px] text-purple-900 font-bold flex items-center gap-1.5">
+                                      {b.poNumber || 'BATCH'}
+                                      {isFirstIn && (
+                                        <span className="bg-purple-600 text-white text-[9px] px-1.5 py-0.2 rounded font-sans uppercase font-bold">
+                                          {t('Next Out')}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-gray-600">{b.supplierName || '—'}</td>
+                                    <td className="px-3 py-2.5 font-mono text-gray-500">{b.receivedDate}</td>
+                                    <td className="px-3 py-2.5">
+                                      {(() => {
+                                        if (!b.expiryDate) return <span className="text-gray-400 font-mono text-[10px]">{t('N/A')}</span>;
+                                        const expDate = new Date(b.expiryDate);
+                                        const today = new Date();
+                                        const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                                        
+                                        let expiryClass = "bg-green-50 text-green-700 border-green-200";
+                                        let expiryLabel = t('Valid');
+                                        if (diffDays < 0) {
+                                          expiryClass = "bg-red-50 text-red-700 border-red-200 font-black animate-pulse";
+                                          expiryLabel = t('EXPIRED');
+                                        } else if (diffDays <= 30) {
+                                          expiryClass = "bg-amber-50 text-amber-700 border-amber-200 font-bold";
+                                          expiryLabel = `${diffDays}d ${t('left')}`;
+                                        }
+
+                                        return (
+                                          <div className="flex flex-col">
+                                            <span className="font-mono text-[11px] text-gray-800">{b.expiryDate}</span>
+                                            <span className={`text-[8px] px-1.5 py-0.2 rounded border w-fit font-bold uppercase mt-0.5 ${expiryClass}`}>
+                                              {expiryLabel}
+                                            </span>
+                                          </div>
+                                        );
+                                      })()}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right text-gray-900 font-mono">
+                                      {formatMoney(b.cost, activeCurrency, activeExchangeRate)}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center font-extrabold text-emerald-700">
+                                      {b.qty} / {b.initialQty}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-bold text-indigo-700">
+                                      {formatMoney(b.qty * b.cost, activeCurrency, activeExchangeRate)}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end shrink-0">
+              <button
+                onClick={() => setFifoBatchProduct(null)}
+                className="bg-gray-900 hover:bg-gray-800 text-white font-bold text-xs px-4 py-2 rounded-xl transition"
+              >
+                {t('Close')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mind Refresh Arcade Break Game Modal */}
+      <ArcadeGameModal
+        isOpen={showGameModal}
+        onClose={() => setShowGameModal(false)}
+        userName={currentUser?.name || currentUser?.username}
       />
 
       {/* Toast Notifications Container */}

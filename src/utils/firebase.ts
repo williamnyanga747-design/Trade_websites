@@ -56,11 +56,28 @@ try {
 const SYSTEM_COLLECTION = 'system';
 const DATA_DOC_ID = 'tradecore_data';
 
+let cloudQuotaExceeded = false;
+try {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('tradecore_cloud_quota_exceeded') === 'true') {
+    cloudQuotaExceeded = true;
+  }
+} catch (e) {}
+
+function markQuotaExceeded() {
+  if (!cloudQuotaExceeded) {
+    cloudQuotaExceeded = true;
+    try {
+      localStorage.setItem('tradecore_cloud_quota_exceeded', 'true');
+    } catch (e) {}
+    console.warn('[Firebase] Cloud write quota limit reached. Falling back seamlessly to local browser storage.');
+  }
+}
+
 /**
  * Saves the unified system state to Firestore
  */
 export async function saveSystemDataToCloud(data: any): Promise<void> {
-  if (!isFirebaseAvailable || !db) {
+  if (!isFirebaseAvailable || !db || cloudQuotaExceeded) {
     return;
   }
   try {
@@ -71,8 +88,12 @@ export async function saveSystemDataToCloud(data: any): Promise<void> {
       sanitized.lastUpdated = new Date().toISOString();
     }
     await setDoc(docRef, sanitized);
-  } catch (error) {
-    console.error('Error saving system data to cloud:', error);
+  } catch (error: any) {
+    if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota limit exceeded')) {
+      markQuotaExceeded();
+    } else {
+      console.error('Error saving system data to cloud:', error);
+    }
   }
 }
 
@@ -82,7 +103,7 @@ export async function saveSystemDataToCloud(data: any): Promise<void> {
  * but falls back to the local cache if offline or on connection failure.
  */
 export async function fetchSystemDataFromCloud(): Promise<any | null> {
-  if (!isFirebaseAvailable || !db) {
+  if (!isFirebaseAvailable || !db || cloudQuotaExceeded) {
     return null;
   }
   const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
@@ -92,7 +113,11 @@ export async function fetchSystemDataFromCloud(): Promise<any | null> {
       return docSnap.data();
     }
     return null;
-  } catch (serverError) {
+  } catch (serverError: any) {
+    if (serverError?.code === 'resource-exhausted' || serverError?.message?.includes('Quota limit exceeded')) {
+      markQuotaExceeded();
+      return null;
+    }
     console.warn('Could not fetch from Firestore server, attempting local cache fallback...', serverError);
     try {
       const docSnap = await getDocFromCache(docRef);
@@ -110,7 +135,7 @@ export async function fetchSystemDataFromCloud(): Promise<any | null> {
  * Subscribes to real-time changes of the unified system state in Firestore
  */
 export function subscribeToSystemDataCloud(callback: (data: any) => void): () => void {
-  if (!isFirebaseAvailable || !db) {
+  if (!isFirebaseAvailable || !db || cloudQuotaExceeded) {
     return () => {};
   }
   const docRef = doc(db, SYSTEM_COLLECTION, DATA_DOC_ID);
@@ -120,8 +145,12 @@ export function subscribeToSystemDataCloud(callback: (data: any) => void): () =>
     } else {
       callback(null);
     }
-  }, (error) => {
-    console.error('Error in real-time cloud data subscription:', error);
+  }, (error: any) => {
+    if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota limit exceeded')) {
+      markQuotaExceeded();
+    } else {
+      console.error('Error in real-time cloud data subscription:', error);
+    }
   });
 }
 

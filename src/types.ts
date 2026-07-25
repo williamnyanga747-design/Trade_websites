@@ -6,6 +6,9 @@ export interface Company {
   subscriptionEnd?: string; // e.g. "2026-08-01"
   subscriptionApproved?: boolean;
   isDeleted?: boolean;
+  language?: LanguageType;
+  currency?: CurrencyType;
+  exchangeRate?: number;
 }
 
 export interface Branch {
@@ -39,8 +42,20 @@ export interface User {
   allowedPages?: string[];
 }
 
+export interface InventoryBatch {
+  id: string;
+  poNumber?: string;
+  supplierName?: string;
+  qty: number;
+  initialQty: number;
+  cost: number;
+  receivedDate: string;
+  expiryDate?: string;
+}
+
 export interface StockItem {
   id: number;
+  companyId?: number | null; // Company ownership ID for company-exclusive privacy
   name: string;
   code: string;
   category: string;
@@ -54,12 +69,35 @@ export interface StockItem {
   imageUrl?: string;
   expiryDate?: string; // Optional Expiry Date field (YYYY-MM-DD)
   expiryDates?: { [storeId: number]: string }; // Store-specific expiry dates (storeId -> YYYY-MM-DD)
+  batches?: { [storeId: number]: InventoryBatch[] }; // FIFO Batch Tracking per store
   useSubUnitPricing?: boolean;
   subUnitName?: string;
   subUnitConversion?: number;
   subUnitRetailPrice?: number;
   subUnitWholesalePrice?: number;
   subUnitPartnerPrice?: number;
+  companyPrices?: {
+    [companyId: number]: {
+      purchasePrice: number;
+      retailPrice: number;
+      wholesalePrice: number;
+      partnerPrice?: number;
+      subUnitRetailPrice?: number;
+      subUnitWholesalePrice?: number;
+      subUnitPartnerPrice?: number;
+    }
+  };
+  storePrices?: {
+    [storeId: number]: {
+      purchasePrice: number;
+      retailPrice: number;
+      wholesalePrice: number;
+      partnerPrice?: number;
+      subUnitRetailPrice?: number;
+      subUnitWholesalePrice?: number;
+      subUnitPartnerPrice?: number;
+    }
+  };
 }
 
 export interface POItem {
@@ -161,14 +199,19 @@ export interface AuditTrail {
 
 export type CurrencyType = 'USD' | 'TZS' | 'KES' | 'UGD' | 'UGX' | 'RWF' | 'EUR' | 'GBP';
 
+export type LanguageType = 'en' | 'sw' | 'fr' | 'es';
+
 export interface Settings {
-  language: 'en' | 'sw';
+  language: LanguageType;
   currency: CurrencyType;
   exchangeRate: number;
+  companyLanguages?: Record<number, LanguageType>;
   companyCurrencies?: Record<number, CurrencyType>;
   companyExchangeRates?: Record<number, number>;
   userCurrencies?: Record<string, CurrencyType>;
   userExchangeRates?: Record<string, number>;
+  allowNegativeStock?: boolean;
+  allowGamesEnabled?: boolean;
 }
 
 export interface PosShift {

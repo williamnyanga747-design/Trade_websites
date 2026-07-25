@@ -146,6 +146,11 @@
     display: block !important;
   }
 
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
   /* Expand print card fully with elegant margins */
   .print-card {
     border: none !important;
@@ -160,9 +165,13 @@
 
   /* Ensure thermal containers match exact slip printer width specifications */
   .print-container {
-    padding: 0 !important;
-    margin: 0 !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    padding: 3mm !important;
+    margin: 0 auto !important;
     overflow: visible !important;
+    font-size: 10px !important;
+    line-height: 1.25 !important;
   }
 
   /* Prevent background bleeding when printing active modal elements */

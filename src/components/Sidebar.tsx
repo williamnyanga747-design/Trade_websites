@@ -4,7 +4,7 @@ import { translate } from '../utils/format';
 import {
   LayoutDashboard, Package, ShoppingCart, Receipt, DollarSign, FileText,
   Database, FileUp, BarChart3, Users, UserCircle, LogOut, ChevronDown, Store,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Settings as SettingsIcon, Sparkles
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -14,9 +14,11 @@ interface SidebarProps {
   allowedPages: string[];
   onNavigate: (page: string) => void;
   onLogout: () => void;
+  onOpenSettings?: () => void;
   lowStockCount?: number;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  language?: 'en' | 'sw' | 'fr' | 'es';
 }
 
 export default function Sidebar({
@@ -26,9 +28,11 @@ export default function Sidebar({
   allowedPages,
   onNavigate,
   onLogout,
+  onOpenSettings,
   lowStockCount = 0,
   isCollapsed = false,
-  onToggleCollapse
+  onToggleCollapse,
+  language
 }: SidebarProps) {
   // Helper for submenus to check if any of their children is active
   const isMasterActive = ['companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate'].includes(currentPage);
@@ -58,8 +62,10 @@ export default function Sidebar({
     if (isUserActive) setShowUsers(true);
   }, [isUserActive]);
 
+  const isSuperAdmin = currentUser?.role === 'Super Admin';
+  const isAdmin = currentUser?.role === 'Admin' || isSuperAdmin;
   const isAllowed = (page: string) => allowedPages.includes(page);
-  const t = (text: string) => translate(text, settings.language);
+  const t = (text: string) => translate(text, language || settings.language || 'en');
 
   return (
     <aside className={`${isCollapsed ? 'w-[70px]' : 'w-64'} bg-[#2d323e] text-gray-200 flex flex-col h-full flex-shrink-0 border-r border-gray-800/20 no-print transition-all duration-300`}>
@@ -150,7 +156,7 @@ export default function Sidebar({
           </button>
         )}
 
-        {/* Receipts Panel (Requested: "ADD THE PANEL FOR RECEIPT OF BUYING AND SELLING") */}
+        {/* Receipts Panel */}
         {isAllowed('receipts') && (
           <button
             onClick={() => onNavigate('receipts')}
@@ -161,6 +167,20 @@ export default function Sidebar({
           >
             <FileText className="w-[18px] h-[18px] flex-shrink-0" />
             {!isCollapsed && <span>{t('Receipts')}</span>}
+          </button>
+        )}
+
+        {/* AI Stock & Pricing Copilot */}
+        {isAllowed('ai-copilot') && (
+          <button
+            onClick={() => onNavigate('ai-copilot')}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center py-2.5' : 'gap-3 px-3 py-2'} rounded-md transition text-left ${
+              currentPage === 'ai-copilot' ? 'bg-indigo-600 text-white font-bold shadow-xs' : 'text-amber-300 hover:bg-white/10 font-semibold'
+            }`}
+            title={isCollapsed ? t('AI Stock Copilot') : undefined}
+          >
+            <Sparkles className="w-[18px] h-[18px] flex-shrink-0 text-amber-400" />
+            {!isCollapsed && <span>{t('AI Stock Copilot')}</span>}
           </button>
         )}
 
@@ -256,7 +276,7 @@ export default function Sidebar({
                     {t('Manage Taxes')}
                   </button>
                 )}
-                {isAllowed('data-recovery') && (
+                {isAllowed('data-recovery') && isSuperAdmin && (
                   <button
                     onClick={() => onNavigate('data-recovery')}
                     className={`w-full text-left px-3 py-1.5 rounded transition ${

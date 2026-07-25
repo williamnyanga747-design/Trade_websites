@@ -10,7 +10,7 @@ interface PDFGeneratorParams {
   currentUser: User | null;
   currency: string;
   exchangeRate: number;
-  language: 'en' | 'sw';
+  language: string;
   companyDetails: {
     name: string;
     branch: string;

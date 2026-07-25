@@ -3,6 +3,7 @@ import { Supplier, StockItem, PurchaseOrder, Store, Settings, POItem } from '../
 import { X, Search, Plus, Minus, Trash2, FileText, AlertTriangle, CheckCircle, Info } from 'lucide-react';
 import { formatMoney } from '../utils/format';
 import { toast } from '../utils/toast';
+import { addFIFOBatch } from '../utils/fifo';
 
 interface PurchaseOrderModalProps {
   isOpen: boolean;
@@ -20,6 +21,8 @@ interface PurchaseOrderModalProps {
   logAction: (action: string, details: string) => void;
   settings: Settings;
   t: (text: string) => string;
+  currency?: string;
+  exchangeRate?: number;
 }
 
 export default function PurchaseOrderModal({
@@ -33,8 +36,12 @@ export default function PurchaseOrderModal({
   saveAllData,
   logAction,
   settings,
-  t
+  t,
+  currency,
+  exchangeRate
 }: PurchaseOrderModalProps) {
+  const activeCurrency = currency || settings.currency || 'USD';
+  const activeExchangeRate = exchangeRate || settings.exchangeRate || 1;
   const activeStores = stores.filter(s => !s.isDeleted);
   const [selectedStoreId, setSelectedStoreId] = useState<number>(currentStoreId || activeStores[0]?.id || 1);
 
@@ -51,6 +58,7 @@ export default function PurchaseOrderModal({
       setSearchQuery('');
       setErrorMsg(null);
       setReceiveImmediately(false);
+      setActiveTab('catalog');
     }
   }, [isOpen, currentStoreId]);
 
@@ -64,6 +72,7 @@ export default function PurchaseOrderModal({
   const [paymentTerms, setPaymentTerms] = useState<string>('Paid in Full');
   const [receiveImmediately, setReceiveImmediately] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'catalog' | 'invoice'>('catalog');
 
   // Filter products by search query
   const filteredProducts = useMemo(() => {
@@ -204,18 +213,37 @@ export default function PurchaseOrderModal({
 
     let updatedStockItems = [...stockItems];
     if (receiveImmediately) {
-      // Add items immediately to store inventory, taking conversion into account
+      // Add items immediately to store inventory, taking conversion into account and creating FIFO batches
       updatedStockItems = stockItems.map(p => {
         const matchingPOItems = poItems.filter(item => item.productId === p.id);
         if (matchingPOItems.length > 0) {
           const nextStockObj = { ...p.stock };
           let totalAddedBaseUnits = 0;
+          let updatedBatchesMap = p.batches || {};
+
           matchingPOItems.forEach(poItem => {
             const conversion = (poItem.unitType || 'main') === 'main' && p.useSubUnitPricing ? (p.subUnitConversion || 1) : 1;
-            totalAddedBaseUnits += poItem.qty * conversion;
+            const addedBaseUnits = poItem.qty * conversion;
+            totalAddedBaseUnits += addedBaseUnits;
+
+            const unitCost = addedBaseUnits > 0 ? (poItem.cost - (poItem.discount || 0)) / conversion : poItem.cost;
+
+            updatedBatchesMap = addFIFOBatch(
+              { ...p, batches: updatedBatchesMap },
+              selectedStoreId,
+              {
+                poNumber: poNum,
+                supplierName: selectedSupplier?.name,
+                qty: addedBaseUnits,
+                cost: unitCost,
+                receivedDate: new Date().toISOString().split('T')[0],
+                expiryDate: p.expiryDates?.[selectedStoreId] || p.expiryDate
+              }
+            );
           });
+
           nextStockObj[selectedStoreId] = (nextStockObj[selectedStoreId] || 0) + totalAddedBaseUnits;
-          return { ...p, stock: nextStockObj };
+          return { ...p, stock: nextStockObj, batches: updatedBatchesMap };
         }
         return p;
       });
@@ -240,10 +268,10 @@ export default function PurchaseOrderModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[92vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-0 md:p-4">
+      <div className="bg-white rounded-none md:rounded-2xl shadow-2xl w-full max-w-6xl h-full md:h-[92vh] max-h-screen md:max-h-[92vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50 text-gray-900">
+        <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-50 text-gray-900 flex-shrink-0">
           <span className="font-bold flex items-center gap-2 text-sm">
             <FileText className="w-5 h-5 text-brand" /> Purchase Order Invoice logging Terminal
           </span>
@@ -252,14 +280,39 @@ export default function PurchaseOrderModal({
           </button>
         </div>
 
+        {/* Mobile Tab Swapper */}
+        <div className="flex border-b md:hidden bg-gray-50 flex-shrink-0">
+          <button
+            onClick={() => setActiveTab('catalog')}
+            className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all ${
+              activeTab === 'catalog' ? 'border-brand text-brand bg-white' : 'border-transparent text-gray-500'
+            }`}
+          >
+            {t('Catalog')}
+          </button>
+          <button
+            onClick={() => setActiveTab('invoice')}
+            className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'invoice' ? 'border-brand text-brand bg-white' : 'border-transparent text-gray-500'
+            }`}
+          >
+            {t('Invoice Layout')}
+            {poItems.length > 0 && (
+              <span className="bg-brand text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                {poItems.reduce((sum, item) => sum + item.qty, 0)}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Content Container Split Screen */}
         <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
           
           {/* Left Panel: Catalog / Products Selector */}
-          <div className="w-full md:w-3/5 p-4 border-r overflow-y-auto flex flex-col space-y-4">
+          <div className={`w-full md:w-3/5 p-4 border-r overflow-y-auto flex flex-col space-y-4 ${activeTab !== 'catalog' ? 'hidden md:flex' : 'flex'}`}>
             
             {/* Search Input */}
-            <div className="relative">
+            <div className="relative flex-shrink-0">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -272,7 +325,7 @@ export default function PurchaseOrderModal({
 
             {/* Error Message Box */}
             {errorMsg && (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg flex items-center gap-2 text-xs font-semibold animate-pulse">
+              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg flex items-center gap-2 text-xs font-semibold animate-pulse flex-shrink-0">
                 <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
                 <span>{errorMsg}</span>
               </div>
@@ -286,7 +339,10 @@ export default function PurchaseOrderModal({
                 return (
                   <div
                     key={item.id}
-                    onClick={() => handleAddItem(item)}
+                    onClick={() => {
+                      handleAddItem(item);
+                      toast.success(`${item.name} ${t('added to draft')}`);
+                    }}
                     className="border rounded-xl p-3 flex flex-col justify-between bg-white hover:border-brand hover:shadow-sm transition text-left cursor-pointer"
                   >
                     <div>
@@ -301,7 +357,7 @@ export default function PurchaseOrderModal({
                       <div className="flex flex-col">
                         <span className="text-[9px] text-gray-400 font-bold uppercase">{t('Est. Cost')}</span>
                         <span className="text-xs font-bold text-gray-900">
-                          {formatMoney(item.purchasePrice, settings.currency, settings.exchangeRate)}
+                          {formatMoney(item.purchasePrice, activeCurrency, activeExchangeRate)}
                         </span>
                       </div>
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600">
@@ -320,7 +376,7 @@ export default function PurchaseOrderModal({
           </div>
 
           {/* Right Panel: Purchase Invoice Items & Logging Details */}
-          <div className="w-full md:w-2/5 bg-gray-50/50 p-4 overflow-y-auto flex flex-col justify-between border-t md:border-t-0">
+          <div className={`w-full md:w-2/5 bg-gray-50/50 p-4 overflow-y-auto flex flex-col justify-between border-t md:border-t-0 ${activeTab !== 'invoice' ? 'hidden md:flex' : 'flex'}`}>
             <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
               <span className="font-bold text-gray-800 text-xs tracking-wider uppercase block">{t('Invoice Layout')}</span>
 
@@ -472,14 +528,14 @@ export default function PurchaseOrderModal({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Unit Cost')} ({settings.currency})</label>
+                          <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Unit Cost')} ({activeCurrency})</label>
                           <input
                             type="number"
                             step="any"
-                            value={settings.currency === 'TZS' ? Math.round(p.cost * settings.exchangeRate) : p.cost}
+                            value={activeCurrency === 'TZS' ? Math.round(p.cost * activeExchangeRate) : p.cost}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              const normalizedVal = settings.currency === 'TZS' ? val / settings.exchangeRate : val;
+                              const normalizedVal = activeCurrency === 'TZS' ? val / activeExchangeRate : val;
                               handleUpdateCost(p.productId, unitType, normalizedVal);
                             }}
                             className="w-full border rounded-lg px-2 py-1 text-xs font-bold font-mono text-gray-900 outline-none focus:border-brand"
@@ -487,14 +543,14 @@ export default function PurchaseOrderModal({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Unit Disc')} ({settings.currency})</label>
+                          <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Unit Disc')} ({activeCurrency})</label>
                           <input
                             type="number"
                             step="any"
-                            value={settings.currency === 'TZS' ? Math.round((p.discount || 0) * settings.exchangeRate) : (p.discount || 0)}
+                            value={activeCurrency === 'TZS' ? Math.round((p.discount || 0) * activeExchangeRate) : (p.discount || 0)}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              const normalizedVal = settings.currency === 'TZS' ? val / settings.exchangeRate : val;
+                              const normalizedVal = activeCurrency === 'TZS' ? val / activeExchangeRate : val;
                               handleUpdateDiscount(p.productId, unitType, normalizedVal);
                             }}
                             className="w-full border rounded-lg px-2 py-1 text-xs font-bold font-mono text-gray-900 outline-none focus:border-brand"
@@ -503,7 +559,7 @@ export default function PurchaseOrderModal({
                       </div>
 
                       <div className="text-right text-[10px] text-gray-400 font-bold">
-                        {t('Line Total')}: <span className="text-gray-900 font-extrabold">{formatMoney((p.cost - (p.discount || 0)) * p.qty, settings.currency, settings.exchangeRate)}</span>
+                        {t('Line Total')}: <span className="text-gray-900 font-extrabold">{formatMoney((p.cost - (p.discount || 0)) * p.qty, activeCurrency, activeExchangeRate)}</span>
                       </div>
                     </div>
                   );
@@ -528,7 +584,7 @@ export default function PurchaseOrderModal({
                 <div className="flex justify-between text-gray-900 font-bold text-sm">
                   <span>{t('GRAND TOTAL')}</span>
                   <span className="text-brand">
-                    {formatMoney(grandTotal, settings.currency, settings.exchangeRate)}
+                    {formatMoney(grandTotal, activeCurrency, activeExchangeRate)}
                   </span>
                 </div>
               </div>

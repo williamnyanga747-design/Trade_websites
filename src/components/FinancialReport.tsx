@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { SalesOrder, Expense, StockItem, Store } from '../types';
+import { SalesOrder, Expense, StockItem, Store, Company, Branch } from '../types';
 import { formatMoney, exportToExcel, translate } from '../utils/format';
 import { handlePrintWithFallback } from '../utils/printHelper';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { 
   Printer, FileSpreadsheet, Calendar, Search, ArrowUpRight, ArrowDownRight, 
-  DollarSign, TrendingUp, Briefcase, Mail, Send, CheckCircle2, Loader, Sparkles, AlertCircle, X
+  DollarSign, TrendingUp, Briefcase, Mail, Send, CheckCircle2, Loader, Sparkles, AlertCircle, X, Building2
 } from 'lucide-react';
 
 interface FinancialReportProps {
@@ -13,6 +13,10 @@ interface FinancialReportProps {
   expenses: Expense[];
   stockItems: StockItem[];
   stores: Store[];
+  companies?: Company[];
+  branches?: Branch[];
+  currentCompanyId?: number | null;
+  currentBranchId?: number | null;
   currentStoreId: number | null;
   currency: string;
   exchangeRate: number;
@@ -24,6 +28,10 @@ export default function FinancialReport({
   expenses,
   stockItems,
   stores,
+  companies = [],
+  branches = [],
+  currentCompanyId,
+  currentBranchId,
   currentStoreId,
   currency,
   exchangeRate,
@@ -418,8 +426,34 @@ export default function FinancialReport({
     }, 2000);
   };
 
+  const activeCompanyObj = companies.find(c => c.id === currentCompanyId);
+  const activeBranchObj = branches.find(b => b.id === currentBranchId);
+  const activeStoreObj = stores.find(s => s.id === currentStoreId);
+
   return (
     <div className="space-y-6">
+      {/* Entity Context Header Banner */}
+      <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-sm border border-slate-800 flex flex-wrap items-center justify-between gap-3 no-print">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-brand/20 text-brand flex items-center justify-center font-bold border border-brand/30">
+            <Building2 className="w-5 h-5 text-brand" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-brand">REPORTING ENTITY CONTEXT</span>
+              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold uppercase">Active Scope</span>
+            </div>
+            <h3 className="text-sm font-black text-white flex flex-wrap items-center gap-2 mt-0.5">
+              <span>Company: <strong className="text-brand">{activeCompanyObj?.name || 'All Companies'}</strong></span>
+              <span className="text-slate-600">•</span>
+              <span>Branch: <strong className="text-slate-200">{activeBranchObj?.name || 'All Branches'}</strong></span>
+              <span className="text-slate-600">•</span>
+              <span>Store Depot: <strong className="text-emerald-400">{activeStoreObj?.name || 'All Stores'}</strong></span>
+            </h3>
+          </div>
+        </div>
+      </div>
+
       {/* Search Period and controls */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col lg:flex-row lg:items-end gap-4 no-print animate-fade-in">
         <div className="flex-1 space-y-1">
@@ -498,6 +532,43 @@ export default function FinancialReport({
           >
             <Printer className="w-4 h-4 text-blue-600" /> Print PDF
           </button>
+        </div>
+      </div>
+
+      {/* Simplified Profit Calculation Breakdown Guide */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 shadow-sm border border-slate-800 space-y-3 no-print">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+              <DollarSign className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-white">Simplified Profit Calculation Guide</h4>
+              <p className="text-[11px] text-slate-400">Clear 4-step explanation of how business profit is measured</p>
+            </div>
+          </div>
+          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-full font-mono font-bold uppercase border border-emerald-500/30">
+            Easy Understanding
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/60">
+            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">1. Revenue (Sales)</span>
+            <p className="text-slate-300 text-[11px] mt-1">Total cash collected from customer purchases in this period.</p>
+          </div>
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/60">
+            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">2. Cost of Goods (COGS)</span>
+            <p className="text-slate-300 text-[11px] mt-1">Original purchase cost paid to suppliers for items sold.</p>
+          </div>
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/60">
+            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider block">3. Gross Profit</span>
+            <p className="text-slate-300 text-[11px] mt-1"><strong>Revenue − COGS</strong> = Direct earnings on sold items before bills.</p>
+          </div>
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/60">
+            <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider block">4. Final Net Profit</span>
+            <p className="text-slate-300 text-[11px] mt-1"><strong>Gross Profit − Operating Expenses</strong> = Take-home net profit.</p>
+          </div>
         </div>
       </div>
 

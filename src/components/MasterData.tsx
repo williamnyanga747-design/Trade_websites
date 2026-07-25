@@ -9,7 +9,7 @@ import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { performCascadeDelete } from '../utils/cascadeDelete';
 import { toast } from '../utils/toast';
-import { getStoreCategories, cleanCategoryName } from '../utils/categoryHelper';
+import { getStoreCategories, getCompanyCategories, formatCompanyCategory, cleanCategoryName } from '../utils/categoryHelper';
 
 interface MasterDataProps {
   currentPage: string;
@@ -333,16 +333,39 @@ export default function MasterData({
     const { type, data } = editingItem;
 
     if (type === 'company') {
+      const coLang = data.language || 'en';
+      const coCurr = data.currency || 'USD';
+      const coRate = data.exchangeRate !== undefined ? Number(data.exchangeRate) : 1;
+      const cleanCompany = {
+        ...data,
+        language: coLang,
+        currency: coCurr,
+        exchangeRate: coRate
+      };
+
       if (data.id) {
         // Edit
-        const updated = companies.map(c => c.id === data.id ? data : c);
-        saveAllData({ companies: updated });
-        logAction('Edit Company', `Modified Company name to: ${data.name}`);
+        const compId = data.id;
+        const updated = companies.map(c => c.id === compId ? cleanCompany : c);
+        const nextSettings = {
+          ...settings,
+          companyLanguages: { ...(settings?.companyLanguages || {}), [compId]: coLang },
+          companyCurrencies: { ...(settings?.companyCurrencies || {}), [compId]: coCurr },
+          companyExchangeRates: { ...(settings?.companyExchangeRates || {}), [compId]: coRate }
+        };
+        saveAllData({ companies: updated, settings: nextSettings });
+        logAction('Edit Company', `Modified Company details for: ${data.name}`);
       } else {
         // Create
         const nextId = Math.max(0, ...companies.map(c => c.id)) + 1;
-        const newCo = { ...data, id: nextId };
-        saveAllData({ companies: [...companies, newCo] });
+        const newCo = { ...cleanCompany, id: nextId };
+        const nextSettings = {
+          ...settings,
+          companyLanguages: { ...(settings?.companyLanguages || {}), [nextId]: coLang },
+          companyCurrencies: { ...(settings?.companyCurrencies || {}), [nextId]: coCurr },
+          companyExchangeRates: { ...(settings?.companyExchangeRates || {}), [nextId]: coRate }
+        };
+        saveAllData({ companies: [...companies, newCo], settings: nextSettings });
         logAction('Create Company', `Registered new Company: ${data.name}`);
       }
     } else if (type === 'branch') {
@@ -414,7 +437,7 @@ export default function MasterData({
     } else if (type === 'category') {
       if (!data.name?.trim()) return;
       const cleanName = data.name.trim();
-      const newCatName = currentStoreId ? `${currentStoreId}:${cleanName}` : cleanName;
+      const newCatName = currentCompanyId ? formatCompanyCategory(cleanName, currentCompanyId) : cleanName;
       if (categories.includes(newCatName)) {
         toast.warning(t('Category already exists!'));
         return;
@@ -943,7 +966,7 @@ export default function MasterData({
             )}
           </div>
           <ul className="divide-y divide-gray-100">
-            {getStoreCategories(categories, currentStoreId).map((c, i) => (
+            {getCompanyCategories(categories, currentCompanyId).map((c, i) => (
               <li key={i} className="px-6 py-4 flex justify-between items-center hover:bg-gray-50/50">
                 <span className="font-bold text-gray-800">{cleanCategoryName(c)}</span>
                 {isAdmin && (
@@ -1031,6 +1054,16 @@ export default function MasterData({
       );
 
     case 'data-recovery':
+      if (!isSuperAdmin) {
+        return (
+          <div className="bg-red-50 border border-red-200 text-red-800 p-6 rounded-xl max-w-xl mx-auto text-center space-y-2 mt-8 shadow-sm">
+            <div className="text-3xl">🔒</div>
+            <h3 className="font-extrabold text-base">{t('Access Denied')}</h3>
+            <p className="text-xs font-medium text-red-700">{t('The Data Recovery Hub is strictly mandated and available ONLY to the Founder Super Admin.')}</p>
+          </div>
+        );
+      }
+
       const deletedCompanies = companies.filter(c => c.isDeleted);
       const deletedBranches = branches.filter(b => b.isDeleted);
       const deletedStores = stores.filter(s => s.isDeleted);
@@ -1046,7 +1079,7 @@ export default function MasterData({
               {t('Data Recovery Hub')}
             </h3>
             <p className="text-xs text-emerald-100 mt-1 max-w-xl">
-              {t('Mistakes happen! Super Admins and Admins can instantly restore soft-deleted companies, branches, or stores with their children nodes intact. All data remains preserved.')}
+              {t('Mistakes happen! Founder Super Admin can instantly restore soft-deleted companies, branches, or stores with their children nodes intact. All data remains preserved.')}
             </p>
           </div>
 
@@ -1379,6 +1412,15 @@ export default function MasterData({
     case 'exchange-rate':
       const currentGlobalRate = settings?.exchangeRate || 1;
       const currentGlobalCurrency = settings?.currency || 'USD';
+      const activeUserCompId = currentUser?.companyId || currentCompanyId;
+
+      const visibleExchangeCompanies = isSuperAdmin
+        ? companies.filter(c => !c.isDeleted)
+        : companies.filter(c => !c.isDeleted && c.id === activeUserCompId);
+
+      const visibleExchangeUsers = isSuperAdmin
+        ? users.filter(u => u.status === 'Active')
+        : users.filter(u => u.status === 'Active' && u.companyId === activeUserCompId);
 
       const handleUpdateGlobalSettings = (newCurrency: string, newRate: number) => {
         const nextSettings = {
@@ -1464,7 +1506,7 @@ export default function MasterData({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {companies.filter(c => !c.isDeleted).map(c => {
+                  {visibleExchangeCompanies.map(c => {
                     const companyCurrency = settings?.companyCurrencies?.[c.id] || currentGlobalCurrency;
                     const companyRate = settings?.companyExchangeRates?.[c.id] !== undefined ? settings.companyExchangeRates[c.id] : currentGlobalRate;
                     const rateInputVal = localCompanyRates[c.id] !== undefined ? localCompanyRates[c.id] : String(companyRate);
@@ -1543,7 +1585,7 @@ export default function MasterData({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {users.filter(u => u.status === 'Active').map(u => {
+                  {visibleExchangeUsers.map(u => {
                     const userCurrency = settings?.userCurrencies?.[u.username] || '';
                     const userRate = settings?.userExchangeRates?.[u.username];
                     const rateInputVal = localUserRates[u.username] !== undefined ? localUserRates[u.username] : (userRate !== undefined ? String(userRate) : '');
@@ -1848,6 +1890,58 @@ export default function MasterData({
                       ))}
                     </div>
                   </div>
+
+                  {/* Company Isolated Language & Currency Settings */}
+                  <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl space-y-3">
+                    <span className="text-xs font-extrabold text-purple-950 uppercase tracking-wider block">
+                      🌐 {t('Company Independent Language & Currency')}
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 mb-1 block uppercase">{t('Company Language')}</label>
+                        <select
+                          value={data.language || settings?.companyLanguages?.[data.id] || 'en'}
+                          onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, language: e.target.value } })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-semibold bg-white outline-none focus:border-brand"
+                        >
+                          <option value="en">English</option>
+                          <option value="sw">Kiswahili (Swahili)</option>
+                          <option value="fr">Français (French)</option>
+                          <option value="es">Español (Spanish)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 mb-1 block uppercase">{t('Company Currency')}</label>
+                        <select
+                          value={data.currency || settings?.companyCurrencies?.[data.id] || 'USD'}
+                          onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, currency: e.target.value } })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-semibold bg-white outline-none focus:border-brand"
+                        >
+                          <option value="USD">USD ($)</option>
+                          <option value="TZS">TZS (TSh)</option>
+                          <option value="KES">KES (KSh)</option>
+                          <option value="UGD">UGD (USh)</option>
+                          <option value="UGX">UGX (USh)</option>
+                          <option value="RWF">RWF (RF)</option>
+                          <option value="EUR">EUR (€)</option>
+                          <option value="GBP">GBP (£)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-700 mb-1 block uppercase">{t('Exchange Conversion (1 USD = X Local Units)')}</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={data.exchangeRate !== undefined ? data.exchangeRate : (settings?.companyExchangeRates?.[data.id] ?? 1)}
+                        onChange={(e) => setEditingItem({ ...editingItem, data: { ...data, exchangeRate: parseFloat(e.target.value) || 1 } })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono font-bold bg-white outline-none focus:border-brand"
+                        placeholder="e.g. 2600"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -2137,7 +2231,7 @@ export default function MasterData({
     { id: 'suppliers', label: t('Suppliers'), icon: '🤝', visible: true },
     { id: 'categories', label: t('Stock Categories'), icon: '📁', visible: true },
     { id: 'taxes', label: t('Manage Taxes'), icon: '📊', visible: true },
-    { id: 'data-recovery', label: t('Data Recovery'), icon: '♻️', visible: isSuperAdmin || isAdmin },
+    { id: 'data-recovery', label: t('Data Recovery'), icon: '♻️', visible: isSuperAdmin },
     { id: 'exchange-rate', label: t('Exchange Rates'), icon: '🌐', visible: isSuperAdmin || isAdmin },
   ].filter(tab => tab.visible);
 

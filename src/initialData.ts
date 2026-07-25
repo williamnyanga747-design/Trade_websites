@@ -15,7 +15,7 @@ export const defaultSettings: Settings = {
 
 export const defaultRolePermissions: Record<string, string[]> = {
   'Super Admin': [
-    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
+    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts', 'ai-copilot',
     'companies', 'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate',
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase',
@@ -23,7 +23,7 @@ export const defaultRolePermissions: Record<string, string[]> = {
     'user-info', 'user-access'
   ],
   'Admin': [
-    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
+    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts', 'ai-copilot',
     'branches', 'stores', 'customers', 'suppliers', 'categories', 'taxes', 'data-recovery', 'exchange-rate',
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase',
@@ -31,17 +31,17 @@ export const defaultRolePermissions: Record<string, string[]> = {
     'user-info'
   ],
   'Retailer': [
-    'dashboard', 'stock-items', 'sales-order', 'expenses', 'receipts',
+    'dashboard', 'stock-items', 'sales-order', 'expenses', 'receipts', 'ai-copilot',
     'report-transaction', 'report-daily', 'report-sales', 'report-sales-outstanding', 'report-lowstock', 'report-shifts'
   ],
   'Wholesaler': [
-    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
+    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts', 'ai-copilot',
     'import-stock', 'import-customers', 'import-suppliers',
     'report-transaction', 'report-daily', 'report-sales', 'report-purchase',
     'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts'
   ],
   'Store Admin': [
-    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts',
+    'dashboard', 'stock-items', 'purchase-order', 'sales-order', 'expenses', 'receipts', 'ai-copilot',
     'report-transaction', 'report-daily', 'report-sales', 'report-purchase',
     'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts',
     'user-info'
@@ -92,12 +92,12 @@ export const defaultCustomers: Customer[] = [
 ];
 
 export const defaultStockItems: StockItem[] = [
-  { id: 1, name: 'Sony WH-1000XM5', code: 'SONY-WH5-BLK', category: 'Electronics', stock: { 1: 8, 2: 5, 3: 2 }, purchasePrice: 280, retailPrice: 399, wholesalePrice: 349, lowStockQty: 10, unit: 'Package', expiryDate: expIn12Days },
-  { id: 2, name: 'Mahindi (Maize) 50kg', code: 'MAZ-50', category: 'Cereals', stock: { 1: 120, 2: 80, 3: 200 }, purchasePrice: 18, retailPrice: 25, wholesalePrice: 22, lowStockQty: 5, unit: 'Kg' },
-  { id: 3, name: 'Mafuta ya Alizeti 20L', code: 'MAF-20', category: 'Oil', stock: { 1: 45, 2: 30, 3: 60 }, purchasePrice: 24, retailPrice: 32, wholesalePrice: 29, lowStockQty: 5, unit: 'Litres', expiryDate: expIn3Days },
-  { id: 4, name: 'Mchele Singida 25kg', code: 'MCH-25', category: 'Cereals', stock: { 1: 1000, 2: 50, 3: 110 }, purchasePrice: 22, retailPrice: 30, wholesalePrice: 26, lowStockQty: 5, unit: 'Kg', expiryDate: exp2DaysAgo },
-  { id: 5, name: 'Sukari 50kg', code: 'SUK-50', category: 'Household', stock: { 1: 3500, 2: 25, 3: 40 }, purchasePrice: 50, retailPrice: 65, wholesalePrice: 58, lowStockQty: 5, unit: 'Kg', expiryDate: expIn25Days },
-  { id: 6, name: 'Cement Twiga 50kg', code: 'CEM-TW', category: 'Building', stock: { 1: 5200, 2: 150, 3: 300 }, purchasePrice: 7, retailPrice: 9.5, wholesalePrice: 8.5, lowStockQty: 5, unit: 'Package' }
+  { id: 1, companyId: 1, name: 'Sony WH-1000XM5', code: 'SONY-WH5-BLK', category: 'Electronics', stock: { 1: 8, 2: 5, 3: 2 }, purchasePrice: 280, retailPrice: 399, wholesalePrice: 349, lowStockQty: 10, unit: 'Package', expiryDate: expIn12Days },
+  { id: 2, companyId: 1, name: 'Mahindi (Maize) 50kg', code: 'MAZ-50', category: 'Cereals', stock: { 1: 120, 2: 80, 3: 200 }, purchasePrice: 18, retailPrice: 25, wholesalePrice: 22, lowStockQty: 5, unit: 'Kg' },
+  { id: 3, companyId: 1, name: 'Mafuta ya Alizeti 20L', code: 'MAF-20', category: 'Oil', stock: { 1: 45, 2: 30, 3: 60 }, purchasePrice: 24, retailPrice: 32, wholesalePrice: 29, lowStockQty: 5, unit: 'Litres', expiryDate: expIn3Days },
+  { id: 4, companyId: 1, name: 'Mchele Singida 25kg', code: 'MCH-25', category: 'Cereals', stock: { 1: 1000, 2: 50, 3: 110 }, purchasePrice: 22, retailPrice: 30, wholesalePrice: 26, lowStockQty: 5, unit: 'Kg', expiryDate: exp2DaysAgo },
+  { id: 5, companyId: 1, name: 'Sukari 50kg', code: 'SUK-50', category: 'Household', stock: { 1: 3500, 2: 25, 3: 40 }, purchasePrice: 50, retailPrice: 65, wholesalePrice: 58, lowStockQty: 5, unit: 'Kg', expiryDate: expIn25Days },
+  { id: 6, companyId: 1, name: 'Cement Twiga 50kg', code: 'CEM-TW', category: 'Building', stock: { 1: 5200, 2: 150, 3: 300 }, purchasePrice: 7, retailPrice: 9.5, wholesalePrice: 8.5, lowStockQty: 5, unit: 'Package' }
 ];
 
 export const defaultPurchaseOrders: PurchaseOrder[] = [

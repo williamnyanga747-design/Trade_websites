@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Customer, StockItem, SalesOrder, Store, Settings, SOItem, PosShift } from '../types';
-import { X, Search, Plus, Minus, Trash2, ShoppingBag, AlertTriangle, CheckCircle, Info, Printer, TrendingUp, Calculator, Lock, Share2, Mail, Check } from 'lucide-react';
+import { X, Search, Plus, Minus, Trash2, ShoppingBag, AlertTriangle, CheckCircle, Info, Printer, TrendingUp, Calculator, Lock, Share2, Mail, Check, Clock, Layers } from 'lucide-react';
 import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
 import { toast } from '../utils/toast';
 import { cleanCategoryName } from '../utils/categoryHelper';
+import { calculateFIFOCost, getFIFOBatchBreakdown } from '../utils/fifo';
 
 interface POSModalProps {
   isOpen: boolean;
@@ -21,12 +22,15 @@ interface POSModalProps {
     customers: Customer[];
     auditTrails: any[];
     posShifts: PosShift[];
+    settings: Settings;
   }>) => void;
   logAction: (action: string, details: string) => void;
   settings: Settings;
   t: (text: string) => string;
   currentUser: any;
   posShifts: PosShift[];
+  currency?: string;
+  exchangeRate?: number;
 }
 
 export default function POSModal({
@@ -42,8 +46,12 @@ export default function POSModal({
   settings,
   t,
   currentUser,
-  posShifts = []
+  posShifts = [],
+  currency,
+  exchangeRate
 }: POSModalProps) {
+  const activeCurrency = currency || settings.currency || 'USD';
+  const activeExchangeRate = exchangeRate || settings.exchangeRate || 1;
   const activeCustomersForStore = useMemo(() => {
     return customers.filter(c => !c.storeId || c.storeId === currentStoreId);
   }, [customers, currentStoreId]);
@@ -64,12 +72,33 @@ export default function POSModal({
     return rawActive;
   }, [stores, currentUser]);
   const [selectedStoreId, setSelectedStoreId] = useState<number>(currentStoreId || activeStores[0]?.id || 1);
+
+  useEffect(() => {
+    if (currentStoreId) {
+      setSelectedStoreId(currentStoreId);
+    }
+  }, [currentStoreId, isOpen]);
   const [priceType, setPriceType] = useState<'Retail' | 'Wholesale' | 'Preferred'>('Retail');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<{ productId: number; qty: number; price: number; cost: number }[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<SalesOrder | null>(null);
   const [activeTab, setActiveTab] = useState<'catalog' | 'cart'>('catalog');
+
+  // Negative Stock and Held Carts features
+  const [allowNegativeStock, setAllowNegativeStock] = useState<boolean>(false);
+  const [suspendedCarts, setSuspendedCarts] = useState<{ id: number; customerId: number; cart: any[]; priceType: 'Retail' | 'Wholesale' | 'Preferred'; timestamp: string; note: string }[]>(() => {
+    try {
+      const saved = localStorage.getItem('pos_suspended_carts');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pos_suspended_carts', JSON.stringify(suspendedCarts));
+  }, [suspendedCarts]);
 
   // Checkout & Payment states
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Bank' | 'Mobile Money' | 'Split'>('Cash');
@@ -108,13 +137,13 @@ export default function POSModal({
     const cust = customers.find(c => c.id === completedOrder?.customerId);
     const storeObj = stores.find(s => s.id === completedOrder?.storeId);
     const companyName = localStorage.getItem('tradecore_receipt_company_name') || storeObj?.name || 'Singida Grain Millers Ltd';
-    const totalDisplay = formatMoney(completedOrder?.total || 0, settings.currency || 'USD', settings.exchangeRate || 1);
+    const totalDisplay = formatMoney(completedOrder?.total || 0, activeCurrency, activeExchangeRate);
 
     let itemsText = '';
     completedOrder?.items.forEach((item, index) => {
       const prod = stockItems.find(p => p.id === item.productId);
       const prodName = prod ? prod.name : 'Unknown Product';
-      const itemPrice = formatMoney(item.price, settings.currency || 'USD', settings.exchangeRate || 1);
+      const itemPrice = formatMoney(item.price, activeCurrency, activeExchangeRate);
       itemsText += `${index + 1}. ${prodName} x ${item.qty} @ ${itemPrice}\n`;
     });
 
@@ -160,6 +189,7 @@ export default function POSModal({
   };
 
   // Drawer / Shift ledger states
+  const [showProfitBreakdownModal, setShowProfitBreakdownModal] = useState(false);
   const [openingFloatStr, setOpeningFloatStr] = useState('100');
   const [openingNotes, setOpeningNotes] = useState('');
   const [closingCashActualStr, setClosingCashActualStr] = useState('');
@@ -173,7 +203,7 @@ export default function POSModal({
   const [showDenomClose, setShowDenomClose] = useState(false);
 
   const handleApplyDenoms = (target: 'open' | 'close') => {
-    const denoms = settings.currency === 'USD'
+    const denoms = activeCurrency === 'USD'
       ? [100, 50, 20, 10, 5, 2, 1, 0.25, 0.10, 0.05, 0.01]
       : [10000, 5000, 2000, 1000, 500, 200, 100, 50];
     const total = denoms.reduce((sum, d) => sum + d * (denomCounts[d] || 0), 0);
@@ -187,7 +217,7 @@ export default function POSModal({
   };
 
   const renderPhysicalDenominationCalculator = (target: 'open' | 'close') => {
-    const denoms = settings.currency === 'USD'
+    const denoms = activeCurrency === 'USD'
       ? [100, 50, 20, 10, 5, 2, 1, 0.25, 0.10, 0.05, 0.01]
       : [10000, 5000, 2000, 1000, 500, 200, 100, 50];
     const total = denoms.reduce((sum, d) => sum + d * (denomCounts[d] || 0), 0);
@@ -210,7 +240,7 @@ export default function POSModal({
           {denoms.map(d => (
             <div key={d} className="flex items-center gap-1.5 justify-between">
               <span className="text-[10px] font-mono font-bold text-gray-500 w-12">
-                {settings.currency === 'USD' ? `$${d}` : `${d}`}
+                {activeCurrency === 'USD' ? `$${d}` : `${d}`}
               </span>
               <span className="text-[10px] text-gray-400">×</span>
               <input
@@ -225,14 +255,14 @@ export default function POSModal({
                 placeholder="0"
               />
               <span className="text-[10px] font-mono text-gray-600 w-16 text-right">
-                = {formatMoney(d * (denomCounts[d] || 0), settings.currency, settings.exchangeRate)}
+                = {formatMoney(d * (denomCounts[d] || 0), activeCurrency, activeExchangeRate)}
               </span>
             </div>
           ))}
         </div>
         <div className="flex items-center justify-between border-t pt-2 mt-2">
           <span className="text-xs font-bold text-slate-800">
-            {t('Total Counted')}: <span className="font-mono text-brand font-black">{formatMoney(total, settings.currency, settings.exchangeRate)}</span>
+            {t('Total Counted')}: <span className="font-mono text-brand font-black">{formatMoney(total, activeCurrency, activeExchangeRate)}</span>
           </span>
           <div className="flex gap-1.5">
             <button
@@ -368,7 +398,7 @@ export default function POSModal({
   const handleAddToCart = (item: StockItem) => {
     setErrorMsg(null);
     const availableStock = getStockQty(item, selectedStoreId); // in base units
-    if (availableStock <= 0) {
+    if (availableStock <= 0 && !allowNegativeStock) {
       setErrorMsg(`${t('Product')} "${item.name}" ${t('is out of stock in this store!')}`);
       return;
     }
@@ -381,7 +411,7 @@ export default function POSModal({
       const currentQtyInCart = cart[existingCartIndex].qty;
       const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id, 'main');
       const totalRequiredBaseUnits = otherBaseUnits + (currentQtyInCart + 1) * itemConversion;
-      if (totalRequiredBaseUnits > availableStock) {
+      if (totalRequiredBaseUnits > availableStock && !allowNegativeStock) {
         const availableInUnit = (availableStock - otherBaseUnits) / itemConversion;
         setErrorMsg(`${t('Requested')} ${currentQtyInCart + 1} ${item.unit || 'unit'} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${item.unit || 'unit'}.`);
         return;
@@ -394,7 +424,7 @@ export default function POSModal({
     } else {
       const otherBaseUnits = getProductTotalInCartInBaseUnits(item.id);
       const totalRequiredBaseUnits = otherBaseUnits + 1 * itemConversion;
-      if (totalRequiredBaseUnits > availableStock) {
+      if (totalRequiredBaseUnits > availableStock && !allowNegativeStock) {
         const availableInUnit = (availableStock - otherBaseUnits) / itemConversion;
         setErrorMsg(`${t('Requested')} 1 ${item.unit || 'unit'} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${item.unit || 'unit'}.`);
         return;
@@ -446,7 +476,7 @@ export default function POSModal({
     const requestedBaseUnits = newQty * conversion;
     const otherBaseUnits = getProductTotalInCartInBaseUnits(productId, unitType);
 
-    if (otherBaseUnits + requestedBaseUnits > availableStock) {
+    if (otherBaseUnits + requestedBaseUnits > availableStock && !allowNegativeStock) {
       const maxAllowedInThisUnit = (availableStock - otherBaseUnits) / conversion;
       const unitLabel = unitType === 'sub' ? (item.subUnitName || 'sub-unit') : (item.unit || 'unit');
       setErrorMsg(`${t('Requested')} ${newQty} ${unitLabel} ${t('exceeds available stock of')} ${parseFloat(maxAllowedInThisUnit.toFixed(4))} ${unitLabel}.`);
@@ -482,20 +512,34 @@ export default function POSModal({
     }));
   };
 
-  // Totals calculations
+  // Totals calculations using FIFO cost evaluation
   const totals = useMemo(() => {
     let grossTotal = 0;
     let totalCost = 0;
+
+    // Group cart items by productId to evaluate FIFO costs collectively
+    const cartByProduct: { [productId: number]: number } = {};
     cart.forEach(c => {
       grossTotal += c.price * c.qty;
       const item = stockItems.find(p => p.id === c.productId);
       if (item) {
-        const itemCost = c.unitType === 'sub' ? item.purchasePrice / (item.subUnitConversion || 1) : item.purchasePrice;
-        totalCost += itemCost * c.qty;
+        const conversion = c.unitType === 'main' && item.useSubUnitPricing ? (item.subUnitConversion || 1) : 1;
+        const requiredBaseUnits = c.qty * conversion;
+        cartByProduct[c.productId] = (cartByProduct[c.productId] || 0) + requiredBaseUnits;
       } else {
         totalCost += c.cost * c.qty;
       }
     });
+
+    Object.entries(cartByProduct).forEach(([pIdStr, requiredBaseUnits]) => {
+      const productId = Number(pIdStr);
+      const item = stockItems.find(p => p.id === productId);
+      if (item) {
+        const fifoResult = calculateFIFOCost(item, selectedStoreId, requiredBaseUnits);
+        totalCost += fifoResult.totalCost;
+      }
+    });
+
     const discountAmount = orderDiscountType === 'Percentage'
       ? grossTotal * (orderDiscountValue / 100)
       : orderDiscountValue;
@@ -507,7 +551,27 @@ export default function POSModal({
       cost: totalCost,
       profit: finalTotal - totalCost
     };
-  }, [cart, stockItems, orderDiscountType, orderDiscountValue]);
+  }, [cart, stockItems, selectedStoreId, orderDiscountType, orderDiscountValue]);
+
+  // Hold / Suspend current active cart
+  const handleSuspendCart = () => {
+    if (cart.length === 0) {
+      toast.warning(t('Cannot hold an empty cart'));
+      return;
+    }
+    const newSuspended = {
+      id: Date.now(),
+      customerId: selectedCustomerId,
+      cart,
+      priceType,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      note: orderNote || `${t('Draft')} - ${cart.length} ${t('items')}`
+    };
+    setSuspendedCarts([...suspendedCarts, newSuspended]);
+    setCart([]);
+    setOrderNote('');
+    toast.success(t('Cart has been put on Hold (Suspended)'));
+  };
 
   // Check customer credit limit validation
   const isCreditExceeded = useMemo(() => {
@@ -530,17 +594,19 @@ export default function POSModal({
     }
 
     // Double check stock validation
-    for (const cartItem of cart) {
-      const item = stockItems.find(p => p.id === cartItem.productId);
-      if (!item) continue;
-      const currentStock = getStockQty(item, selectedStoreId); // in base units
-      const conversion = cartItem.unitType === 'main' ? (item.subUnitConversion || 1) : 1;
-      const requiredQtyInBaseUnits = cartItem.qty * conversion;
-      if (requiredQtyInBaseUnits > currentStock) {
-        const availableInUnit = currentStock / conversion;
-        const unitLabel = cartItem.unitType === 'sub' ? (item.subUnitName || 'sub-unit') : (item.unit || 'unit');
-        setErrorMsg(`${t('Requested')} ${cartItem.qty} ${unitLabel} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${unitLabel}.`);
-        return;
+    if (!allowNegativeStock) {
+      for (const cartItem of cart) {
+        const item = stockItems.find(p => p.id === cartItem.productId);
+        if (!item) continue;
+        const currentStock = getStockQty(item, selectedStoreId); // in base units
+        const conversion = cartItem.unitType === 'main' ? (item.subUnitConversion || 1) : 1;
+        const requiredQtyInBaseUnits = cartItem.qty * conversion;
+        if (requiredQtyInBaseUnits > currentStock) {
+          const availableInUnit = currentStock / conversion;
+          const unitLabel = cartItem.unitType === 'sub' ? (item.subUnitName || 'sub-unit') : (item.unit || 'unit');
+          setErrorMsg(`${t('Requested')} ${cartItem.qty} ${unitLabel} ${t('exceeds available stock of')} ${parseFloat(availableInUnit.toFixed(4))} ${unitLabel}.`);
+          return;
+        }
       }
     }
 
@@ -595,7 +661,7 @@ export default function POSModal({
       paymentSplit: paymentMethod === 'Split' ? { cash: cashAmount, bank: bankAmount, mobile: mobileAmount } : undefined
     };
 
-    // Subtract stock quantities
+    // Subtract stock quantities and deduct from FIFO batches
     const updatedStockItems = stockItems.map(p => {
       const matchingCartItems = cart.filter(c => c.productId === p.id);
       if (matchingCartItems.length > 0) {
@@ -605,8 +671,15 @@ export default function POSModal({
           const conversion = cartItem.unitType === 'main' ? (p.subUnitConversion || 1) : 1;
           totalDeductionInBaseUnits += cartItem.qty * conversion;
         });
-        nextStockObj[selectedStoreId] = Math.max(0, (nextStockObj[selectedStoreId] || 0) - totalDeductionInBaseUnits);
-        return { ...p, stock: nextStockObj };
+
+        // Deduct from FIFO batch queue
+        const fifoResult = calculateFIFOCost(p, selectedStoreId, totalDeductionInBaseUnits);
+        const updatedBatchesMap = { ...(p.batches || {}) };
+        updatedBatchesMap[selectedStoreId] = fifoResult.updatedBatches;
+
+        const currentStockVal = nextStockObj[selectedStoreId] || 0;
+        nextStockObj[selectedStoreId] = allowNegativeStock ? (currentStockVal - totalDeductionInBaseUnits) : Math.max(0, currentStockVal - totalDeductionInBaseUnits);
+        return { ...p, stock: nextStockObj, batches: updatedBatchesMap };
       }
       return p;
     });
@@ -753,26 +826,26 @@ export default function POSModal({
               </div>
               <div className="flex justify-between font-semibold border-b pb-2">
                 <span className="text-gray-400">Opening Float</span>
-                <span className="font-bold text-gray-900">{formatMoney(reconciledShiftSummary.openingFloat, settings.currency, settings.exchangeRate)}</span>
+                <span className="font-bold text-gray-900">{formatMoney(reconciledShiftSummary.openingFloat, activeCurrency, activeExchangeRate)}</span>
               </div>
               <div className="flex justify-between font-semibold border-b pb-2">
                 <span className="text-gray-400">Expected Register Cash Sales</span>
-                <span className="font-bold text-emerald-700">+{formatMoney(reconciledShiftSummary.expectedCashSales || 0, settings.currency, settings.exchangeRate)}</span>
+                <span className="font-bold text-emerald-700">+{formatMoney(reconciledShiftSummary.expectedCashSales || 0, activeCurrency, activeExchangeRate)}</span>
               </div>
               <div className="flex justify-between font-semibold border-b pb-2">
                 <span className="text-gray-400">Theoretical Drawer Cash (Expected)</span>
-                <span className="font-bold text-gray-900">{formatMoney(expectedTotal, settings.currency, settings.exchangeRate)}</span>
+                <span className="font-bold text-gray-900">{formatMoney(expectedTotal, activeCurrency, activeExchangeRate)}</span>
               </div>
               <div className="flex justify-between font-semibold border-b pb-2 bg-slate-50 p-2 rounded">
                 <span className="text-slate-500 font-bold">Actual Counted Cash (Declared)</span>
-                <span className="font-black text-slate-900">{formatMoney(reconciledShiftSummary.closingCashActual || 0, settings.currency, settings.exchangeRate)}</span>
+                <span className="font-black text-slate-900">{formatMoney(reconciledShiftSummary.closingCashActual || 0, activeCurrency, activeExchangeRate)}</span>
               </div>
               
               <div className={`flex justify-between font-black border-b pb-2 p-2 rounded ${
                 varAmount < 0 ? 'bg-red-50 text-red-700' : varAmount > 0 ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
               }`}>
                 <span>Cash Reconciliation Variance</span>
-                <span>{varAmount > 0 ? '+' : ''}{formatMoney(varAmount, settings.currency, settings.exchangeRate)}</span>
+                <span>{varAmount > 0 ? '+' : ''}{formatMoney(varAmount, activeCurrency, activeExchangeRate)}</span>
               </div>
               
               {reconciledShiftSummary.notes && (
@@ -866,14 +939,14 @@ export default function POSModal({
     }
 
     const getFloatPresets = () => {
-      if (settings.currency === 'TZS') {
+      if (activeCurrency === 'TZS') {
         return [
           { label: t('Standard Day Float'), value: 100000 },
           { label: t('Weekend Float'), value: 250000 },
           { label: t('Minimum Backup Float'), value: 50000 },
           { label: t('Big Ledger Float'), value: 500000 },
         ];
-      } else if (settings.currency === 'KES') {
+      } else if (activeCurrency === 'KES') {
         return [
           { label: t('Standard Day Float'), value: 5000 },
           { label: t('Weekend Float'), value: 12000 },
@@ -934,7 +1007,7 @@ export default function POSModal({
                 </button>
               </div>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{settings.currency}</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{activeCurrency}</span>
                 <input
                   type="number"
                   value={openingFloatStr}
@@ -956,7 +1029,7 @@ export default function POSModal({
                     }}
                     className="px-2 py-1 text-[10px] font-bold border border-gray-200 hover:border-brand/40 hover:bg-brand/5 text-gray-700 hover:text-brand rounded-lg transition-all"
                   >
-                    ⚡ {preset.label}: {formatMoney(preset.value, settings.currency, settings.exchangeRate)}
+                    ⚡ {preset.label}: {formatMoney(preset.value, activeCurrency, activeExchangeRate)}
                   </button>
                 ))}
               </div>
@@ -1010,7 +1083,7 @@ export default function POSModal({
 
     return (
       <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[92vh]">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[320px] overflow-hidden flex flex-col max-h-[92vh]">
           {/* Success Title Header */}
           <div className="px-5 py-4 border-b flex items-center justify-between bg-emerald-600 text-white no-print">
             <span className="font-bold flex items-center gap-2 text-sm">
@@ -1041,6 +1114,10 @@ export default function POSModal({
               <div className="flex justify-between">
                 <span>BILL NO:</span>
                 <span className="font-bold">{completedOrder.soNumber}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>STORE:</span>
+                <span className="font-bold">{stores.find(s => s.id === completedOrder.storeId)?.name || 'Main Store'}</span>
               </div>
               <div className="flex justify-between">
                 <span>DATE:</span>
@@ -1075,8 +1152,8 @@ export default function POSModal({
                     <tr key={idx} className="text-gray-700">
                       <td className="py-1.5 max-w-[140px] truncate">{product?.name || `Product #${item.productId}`}</td>
                       <td className="py-1.5 text-center">{item.qty} {item.unitType === 'sub' ? (item.subUnitName || 'unit') : (product?.unit || 'Package')}</td>
-                      <td className="py-1.5 text-right">{formatMoney(item.price, settings.currency, settings.exchangeRate)}</td>
-                      <td className="py-1.5 text-right font-bold text-gray-900">{formatMoney(item.price * item.qty, settings.currency, settings.exchangeRate)}</td>
+                      <td className="py-1.5 text-right">{formatMoney(item.price, activeCurrency, activeExchangeRate)}</td>
+                      <td className="py-1.5 text-right font-bold text-gray-900">{formatMoney(item.price * item.qty, activeCurrency, activeExchangeRate)}</td>
                     </tr>
                   );
                 })}
@@ -1088,11 +1165,11 @@ export default function POSModal({
             <div className="space-y-1.5 text-xs font-bold text-gray-900">
               <div className="flex justify-between">
                 <span>SUBTOTAL</span>
-                <span>{formatMoney(completedOrder.total, settings.currency, settings.exchangeRate)}</span>
+                <span>{formatMoney(completedOrder.total, activeCurrency, activeExchangeRate)}</span>
               </div>
               <div className="flex justify-between text-sm font-black border-t border-dashed border-gray-300 pt-1.5">
                 <span>TOTAL AMOUNT</span>
-                <span className="text-brand">{formatMoney(completedOrder.total, settings.currency, settings.exchangeRate)}</span>
+                <span className="text-brand">{formatMoney(completedOrder.total, activeCurrency, activeExchangeRate)}</span>
               </div>
             </div>
 
@@ -1351,8 +1428,8 @@ export default function POSModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[92vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-0 md:p-4">
+      <div className="bg-white rounded-none md:rounded-2xl shadow-2xl w-full max-w-6xl h-full md:h-[92vh] max-h-screen md:max-h-[92vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="px-5 py-4 border-b flex items-center justify-between bg-gray-900 text-white flex-shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
@@ -1361,7 +1438,7 @@ export default function POSModal({
             </span>
             {activeShift && (
               <span className="text-[10px] bg-brand/20 border border-brand/50 text-brand px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
-                Shift: {activeShift.username} | Float: {formatMoney(activeShift.openingFloat, settings.currency, settings.exchangeRate)} | Drawer: {formatMoney(activeShift.openingFloat + (activeShift.expectedCashSales || 0), settings.currency, settings.exchangeRate)}
+                Shift: {activeShift.username} | Float: {formatMoney(activeShift.openingFloat, activeCurrency, activeExchangeRate)} | Drawer: {formatMoney(activeShift.openingFloat + (activeShift.expectedCashSales || 0), activeCurrency, activeExchangeRate)}
               </span>
             )}
           </div>
@@ -1424,24 +1501,83 @@ export default function POSModal({
                     placeholder={t('Search products by name, category, or code...')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && searchQuery.trim()) {
+                        const q = searchQuery.trim().toLowerCase();
+                        const exactMatch = stockItems.find(
+                          p => p.code.toLowerCase() === q || p.name.toLowerCase() === q
+                        );
+                        if (exactMatch) {
+                          const stockQty = getStockQty(exactMatch, selectedStoreId);
+                          if (stockQty > 0 || allowNegativeStock) {
+                            handleAddToCart(exactMatch);
+                            setSearchQuery('');
+                            toast.success(`${exactMatch.name} added to cart!`);
+                          } else {
+                            setErrorMsg(`${exactMatch.name} is out of stock!`);
+                          }
+                        }
+                      }
+                    }}
                     className="w-full pl-9 pr-3 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-semibold outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand"
                   />
                 </div>
                 
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase">{t('Store Depot')}:</span>
-                  <select
-                    value={selectedStoreId}
-                    onChange={(e) => {
-                      setSelectedStoreId(Number(e.target.value));
-                      setCart([]); // Clear cart when store changes
-                    }}
-                    className="bg-white border px-2.5 py-1 rounded-md text-[11px] font-bold text-gray-700 outline-none"
-                  >
-                    {activeStores.map(st => (
-                      <option key={st.id} value={st.id}>{st.name}</option>
-                    ))}
-                  </select>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 max-w-full overflow-x-auto whitespace-nowrap scrollbar-none py-1">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase shrink-0">{t('Store Depot')}:</span>
+                    <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap scrollbar-none max-w-full">
+                      {activeStores.map(st => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => {
+                            if (selectedStoreId !== st.id) {
+                              setSelectedStoreId(st.id);
+                              setCart([]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition shrink-0 border ${
+                            selectedStoreId === st.id
+                              ? 'bg-brand text-white border-brand shadow-xs'
+                              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          🏪 {st.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {isAdminUser ? (
+                    <div className="flex items-center gap-1.5 border-l pl-3 border-gray-200">
+                      <input
+                        type="checkbox"
+                        id="allowNegativeStock"
+                        checked={allowNegativeStock}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setAllowNegativeStock(val);
+                          localStorage.setItem('pos_allow_negative_stock', String(val));
+                          if (saveAllData && settings) {
+                            saveAllData({ settings: { ...settings, allowNegativeStock: val } });
+                          }
+                        }}
+                        className="rounded text-brand focus:ring-brand w-3.5 h-3.5 cursor-pointer accent-emerald-600"
+                      />
+                      <label htmlFor="allowNegativeStock" className="text-[10px] font-black text-gray-500 uppercase cursor-pointer select-none flex items-center gap-1">
+                        ⚠️ {t('Allow Negative Stock')}
+                      </label>
+                    </div>
+                  ) : (
+                    allowNegativeStock && (
+                      <div className="flex items-center gap-1 border-l pl-3 border-gray-200">
+                        <span className="text-[10px] font-black text-amber-600 uppercase flex items-center gap-1">
+                          ⚠️ {t('Negative Stock Allowed')}
+                        </span>
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
 
@@ -1461,25 +1597,41 @@ export default function POSModal({
                   const currentPrice = getProductPrice(item);
                   const isOutOfStock = stockQty <= 0;
 
+                  const isBlocked = isOutOfStock && !allowNegativeStock;
+
                   return (
                     <div
                       key={item.id}
-                      onClick={() => !isOutOfStock && handleAddToCart(item)}
+                      onClick={() => !isBlocked && handleAddToCart(item)}
                       className={`group border border-gray-200/80 hover:border-brand rounded-xl overflow-hidden cursor-pointer transition-all duration-150 flex flex-col justify-between bg-white ${
-                        isOutOfStock ? 'opacity-55 cursor-not-allowed bg-gray-50' : 'hover:shadow-sm'
+                        isOutOfStock 
+                          ? isBlocked 
+                            ? 'opacity-55 cursor-not-allowed bg-gray-50' 
+                            : 'opacity-85 hover:shadow-xs border-amber-200 bg-amber-50/5'
+                          : 'hover:shadow-sm'
                       }`}
                     >
                       <div className="p-3">
                         <div className="h-28 bg-gray-50 rounded-lg overflow-hidden border border-gray-100 flex items-center justify-center relative">
+                          {item.batches?.[selectedStoreId]?.some(b => b.qty > 0) && (
+                            <span className="absolute top-2 left-2 text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase bg-purple-600 text-white flex items-center gap-1 shadow-2xs z-10" title={t('Uses FIFO Batch Stocking')}>
+                              <Layers className="w-2.5 h-2.5" />
+                              FIFO ({item.batches[selectedStoreId].filter(b => b.qty > 0).length})
+                            </span>
+                          )}
                           {item.imageUrl ? (
                             <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" referrerPolicy="no-referrer" />
                           ) : (
                             <span className="text-2xl font-black text-gray-200">ERP</span>
                           )}
                           <span className={`absolute top-2 right-2 text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${
-                            isOutOfStock ? 'bg-red-600 text-white' : 'bg-gray-900 text-white'
+                            isOutOfStock 
+                              ? isBlocked ? 'bg-red-600 text-white' : 'bg-amber-600 text-white'
+                              : 'bg-gray-900 text-white'
                           }`}>
-                            {isOutOfStock ? t('Out of Stock') : `${formatStockQty(stockQty, item)} ${t('available')}`}
+                            {isOutOfStock 
+                              ? isBlocked ? t('Out of Stock') : `${t('Out of Stock')} (⚠️ ${t('Allowed')})`
+                              : `${formatStockQty(stockQty, item)} ${t('available')}`}
                           </span>
                         </div>
 
@@ -1492,11 +1644,11 @@ export default function POSModal({
 
                       <div className="p-3 border-t bg-gray-50/50 flex items-center justify-between">
                         <span className="text-[13px] font-black text-brand">
-                          {formatMoney(currentPrice, settings.currency, settings.exchangeRate)}
+                          {formatMoney(currentPrice, activeCurrency, activeExchangeRate)}
                         </span>
                         <button
-                          disabled={isOutOfStock}
-                          className="bg-brand group-hover:bg-brand-hover text-white p-1 rounded transition-colors"
+                          disabled={isBlocked}
+                          className={`${isBlocked ? 'bg-gray-300' : 'bg-brand group-hover:bg-brand-hover'} text-white p-1 rounded transition-colors`}
                         >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
@@ -1515,16 +1667,30 @@ export default function POSModal({
           </div>
 
           {/* Right Panel: Shopping Cart Details & Invoice Summary */}
-          <div className={`w-full md:w-96 overflow-hidden flex flex-col p-5 bg-gray-50 flex-shrink-0 border-t md:border-t-0 ${activeTab !== 'cart' ? 'hidden md:flex' : 'flex'}`}>
-            <div className="flex-shrink-0 space-y-3.5 mb-4">
+          <div className={`w-full md:w-96 h-full max-h-full overflow-hidden flex flex-col p-4 md:p-5 bg-gray-50 flex-shrink-0 border-t md:border-t-0 ${activeTab !== 'cart' ? 'hidden md:flex' : 'flex'}`}>
+            <div className="flex-shrink-0 space-y-3.5 mb-3">
               <div className="flex justify-between items-center">
                 <span className="font-bold text-gray-900 text-xs uppercase tracking-wider">{t('Cart Summary')}</span>
-                <button
-                  onClick={() => setCart([])}
-                  className="text-[10px] text-gray-400 hover:text-red-600 font-bold"
-                >
-                  {t('Clear Cart')}
-                </button>
+                <div className="flex items-center gap-3">
+                  {cart.length > 0 && (
+                    <button
+                      onClick={handleSuspendCart}
+                      className="text-[10px] text-amber-600 hover:text-amber-700 font-black flex items-center gap-1 uppercase tracking-wider"
+                      title={t('Hold current cart to serve another customer')}
+                    >
+                      ⏸️ {t('Hold')}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setCart([]);
+                      setOrderNote('');
+                    }}
+                    className="text-[10px] text-gray-400 hover:text-red-600 font-bold uppercase tracking-wider"
+                  >
+                    {t('Clear')}
+                  </button>
+                </div>
               </div>
 
               {/* Client and pricing selectors */}
@@ -1579,11 +1745,11 @@ export default function POSModal({
                   <div className="pt-2 border-t text-[10px] space-y-0.5 font-bold">
                     <div className="flex justify-between">
                       <span className="text-gray-400">CREDIT LIMIT:</span>
-                      <span className="text-gray-900">{formatMoney(selectedCustomer.creditLimit, settings.currency, settings.exchangeRate)}</span>
+                      <span className="text-gray-900">{formatMoney(selectedCustomer.creditLimit, activeCurrency, activeExchangeRate)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-400">CURRENT BAL:</span>
-                      <span className="text-amber-600">{formatMoney(selectedCustomer.balance, settings.currency, settings.exchangeRate)}</span>
+                      <span className="text-amber-600">{formatMoney(selectedCustomer.balance, activeCurrency, activeExchangeRate)}</span>
                     </div>
                     {isCreditExceeded && (
                       <div className="bg-red-50 text-red-700 p-1.5 rounded mt-1.5 border border-red-100 text-[9px] font-black uppercase tracking-wider flex items-center gap-1">
@@ -1594,14 +1760,83 @@ export default function POSModal({
                   </div>
                 )}
               </div>
-              <div className="mt-3">
+              <div className="mt-2">
                 <AIPOSAssistantPanel />
               </div>
             </div>
 
-            {/* Cart Items List */}
-            <div className="flex-1 overflow-y-auto pr-1 scrollbar-thin">
-              <div className="space-y-2 pb-2">
+            {/* Middle Scrollable Section: Suspended Carts + Cart Items + Payment/Notes Options */}
+            <div className="flex-1 overflow-y-auto min-h-0 pr-1 scrollbar-thin space-y-3">
+              {/* Suspended Carts Panel */}
+              {suspendedCarts.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                      ⏳ {t('Held Carts / Suspended')} ({suspendedCarts.length})
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto pr-0.5 scrollbar-thin">
+                    {suspendedCarts.map(sc => {
+                      const custObj = customers.find(c => c.id === sc.customerId);
+                      return (
+                        <div key={sc.id} className="bg-white border border-amber-100 rounded-lg p-2 flex items-center justify-between text-[11px] hover:shadow-xs transition">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-extrabold text-gray-800 block truncate">
+                              {custObj?.name || t('Guest')} - {sc.note}
+                            </span>
+                            <span className="text-[9px] text-gray-400 font-mono">
+                              {sc.timestamp} | {sc.cart.reduce((sum, item) => sum + item.qty, 0)} {t('items')} ({t(sc.priceType)})
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                            <button
+                              onClick={() => {
+                                if (cart.length > 0) {
+                                  if (window.confirm(t('Replace active cart with this held cart? Click Cancel to merge instead.'))) {
+                                    setCart(sc.cart);
+                                  } else {
+                                    const merged = [...cart];
+                                    sc.cart.forEach(scItem => {
+                                      const match = merged.find(c => c.productId === scItem.productId && c.unitType === scItem.unitType);
+                                      if (match) {
+                                        match.qty += scItem.qty;
+                                      } else {
+                                        merged.push(scItem);
+                                      }
+                                    });
+                                    setCart(merged);
+                                  }
+                                } else {
+                                  setCart(sc.cart);
+                                }
+                                setSelectedCustomerId(sc.customerId);
+                                setPriceType(sc.priceType);
+                                setSuspendedCarts(suspendedCarts.filter(c => c.id !== sc.id));
+                                toast.success(t('Held cart retrieved successfully'));
+                              }}
+                              className="bg-amber-600 hover:bg-amber-700 text-white px-2 py-0.5 rounded text-[9px] font-bold uppercase transition"
+                            >
+                              {t('Resume')}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSuspendedCarts(suspendedCarts.filter(c => c.id !== sc.id));
+                                toast.success(t('Draft cleared'));
+                              }}
+                              className="text-gray-400 hover:text-red-600"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Cart Items List */}
+              <div className="space-y-2">
                 {cart.map(c => {
                   const product = stockItems.find(p => p.id === c.productId);
                   if (!product) return null;
@@ -1617,7 +1852,7 @@ export default function POSModal({
                         <span className="font-black text-gray-900 text-xs block truncate">{product.name}</span>
                         <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                           <span className="text-[10px] text-brand font-bold">
-                            {formatMoney(c.price, settings.currency, settings.exchangeRate)} / {currentUnitType === 'sub' ? product.subUnitName : (product.unit || 'unit')}
+                            {formatMoney(c.price, activeCurrency, activeExchangeRate)} / {currentUnitType === 'sub' ? product.subUnitName : (product.unit || 'unit')}
                           </span>
                           {product.useSubUnitPricing && (
                             <select
@@ -1666,175 +1901,211 @@ export default function POSModal({
                 })}
 
                 {cart.length === 0 && (
-                  <div className="h-full flex flex-col justify-center items-center text-gray-400 text-center font-bold text-xs space-y-2 py-8">
-                    <ShoppingBag className="w-8 h-8 text-gray-300" />
-                    <span>{t('Active Cart is Empty')}</span>
+                  <div className="flex flex-col items-center justify-center py-5 px-4 text-center space-y-3 bg-white border border-dashed border-gray-300 rounded-2xl my-2 shadow-2xs">
+                    <ShoppingBag className="w-10 h-10 text-brand/50 animate-pulse" />
+                    <p className="text-xs font-black text-gray-800 uppercase tracking-wider">{t('Active Cart is Empty')}</p>
+                    <p className="text-[10px] text-gray-500 font-medium max-w-[240px] leading-relaxed">
+                      {t('Configure transaction parameters above, then tap catalog items to load products.')}
+                    </p>
+                    
+                    <div className="w-full pt-3 border-t border-gray-100 text-left text-[11px] space-y-1.5 text-gray-600">
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Active Store')}</span>
+                        <span className="font-extrabold text-gray-800 truncate max-w-[150px]">{stores.find(s => s.id === selectedStoreId)?.name || t('Not Assigned')}</span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Operator')}</span>
+                        <span className="font-extrabold text-gray-800">{currentUser?.name || t('Guest')} ({t(currentUser?.role || '')})</span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Billing Mode')}</span>
+                        <span className="font-extrabold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100 text-[10px]">{t(priceType)}</span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Selected Client')}</span>
+                        <span className="font-extrabold text-gray-800 truncate max-w-[150px]">{customers.find(c => c.id === selectedCustomerId)?.name || t('Guest')}</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
+
+              {/* Payment & Adjustments Panel */}
+              {cart.length > 0 && (
+                <div className="border-t pt-3 space-y-3 no-print">
+                  <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2 shadow-2xs">
+                    <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
+                      ⚡ {t('Discounts & Transaction Notes')}
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Type')}</label>
+                        <select
+                          value={orderDiscountType}
+                          onChange={(e) => setOrderDiscountType(e.target.value as 'Flat' | 'Percentage')}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                        >
+                          <option value="Flat">{t('Flat')}</option>
+                          <option value="Percentage">{t('Percentage (%)')}</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Value')}</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={orderDiscountValue}
+                          onChange={(e) => setOrderDiscountValue(parseFloat(e.target.value) || 0)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold outline-none focus:border-brand"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Transaction Notes')}</label>
+                      <input
+                        type="text"
+                        placeholder={t('Any internal memo or delivery note...')}
+                        value={orderNote}
+                        onChange={(e) => setOrderNote(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs outline-none focus:border-brand"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2 shadow-2xs">
+                    <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
+                      💳 {t('Payment Mode & Split Options')}
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Method')}</label>
+                        <select
+                          value={paymentMethod}
+                          onChange={(e) => setPaymentMethod(e.target.value as 'Cash' | 'Bank' | 'Mobile Money' | 'Split')}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                        >
+                          <option value="Cash">{t('Cash')}</option>
+                          <option value="Bank">{t('Bank / Transfer')}</option>
+                          <option value="Mobile Money">{t('Mobile Money (M-Pesa/Tigo)')}</option>
+                          <option value="Split">{t('Split Payments 🔄')}</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Status')}</label>
+                        <select
+                          value={paymentStatus}
+                          onChange={(e) => setPaymentStatus(e.target.value as 'Paid' | 'Credit' | 'Partial')}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
+                        >
+                          <option value="Paid">{t('Paid in Full')}</option>
+                          <option value="Credit">{t('Credit / On Account')}</option>
+                          <option value="Partial">{t('Partial Deposit')}</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Split payments inputs */}
+                    {paymentMethod === 'Split' && (
+                      <div className="space-y-1.5 pt-2 border-t mt-2">
+                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase block">{t('Split Breakdown')}</span>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <div className="space-y-0.5">
+                            <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Cash')}</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              value={cashAmount || ''}
+                              onChange={(e) => setCashAmount(parseFloat(e.target.value) || 0)}
+                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                            />
+                          </div>
+                          <div className="space-y-0.5">
+                            <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Bank')}</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              value={bankAmount || ''}
+                              onChange={(e) => setBankAmount(parseFloat(e.target.value) || 0)}
+                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                            />
+                          </div>
+                          <div className="space-y-0.5">
+                            <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Mobile')}</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              value={mobileAmount || ''}
+                              onChange={(e) => setMobileAmount(parseFloat(e.target.value) || 0)}
+                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-bold text-indigo-500 mt-1 flex justify-between font-mono">
+                          <span>{t('Total Split Paid')}:</span>
+                          <span>{formatMoney(cashAmount + bankAmount + mobileAmount, activeCurrency, activeExchangeRate)}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Partial payment inputs */}
+                    {paymentStatus === 'Partial' && paymentMethod !== 'Split' && (
+                      <div className="space-y-1 pt-2 border-t mt-2">
+                        <label className="text-[9px] font-bold text-gray-400 uppercase">
+                          {paymentMethod === 'Cash' ? t('Amount Paid (Cash)') : (paymentMethod === 'Bank' ? t('Amount Paid (Bank)') : t('Amount Paid (Mobile)'))}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="Enter deposit amount"
+                          value={paymentMethod === 'Cash' ? cashAmount || '' : (paymentMethod === 'Bank' ? bankAmount || '' : mobileAmount || '')}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            if (paymentMethod === 'Cash') setCashAmount(val);
+                            else if (paymentMethod === 'Bank') setBankAmount(val);
+                            else setMobileAmount(val);
+                          }}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold font-mono outline-none focus:border-brand"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Payment & Adjustments Panel */}
-            {cart.length > 0 && (
-              <div className="border-t pt-3 mt-3 space-y-3 px-1 no-print">
-                <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
-                  <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
-                    ⚡ {t('Discounts & Transaction Notes')}
-                  </span>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Type')}</label>
-                      <select
-                        value={orderDiscountType}
-                        onChange={(e) => setOrderDiscountType(e.target.value as 'Flat' | 'Percentage')}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
-                      >
-                        <option value="Flat">{t('Flat')}</option>
-                        <option value="Percentage">{t('Percentage (%)')}</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Discount Value')}</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={orderDiscountValue}
-                        onChange={(e) => setOrderDiscountValue(parseFloat(e.target.value) || 0)}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold outline-none focus:border-brand"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Transaction Notes')}</label>
-                    <input
-                      type="text"
-                      placeholder={t('Any internal memo or delivery note...')}
-                      value={orderNote}
-                      onChange={(e) => setOrderNote(e.target.value)}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs outline-none focus:border-brand"
-                    />
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
-                  <span className="text-[10px] font-extrabold text-brand uppercase tracking-wider block">
-                    💳 {t('Payment Mode & Split Options')}
-                  </span>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Method')}</label>
-                      <select
-                        value={paymentMethod}
-                        onChange={(e) => setPaymentMethod(e.target.value as 'Cash' | 'Bank' | 'Mobile Money' | 'Split')}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
-                      >
-                        <option value="Cash">{t('Cash')}</option>
-                        <option value="Bank">{t('Bank / Transfer')}</option>
-                        <option value="Mobile Money">{t('Mobile Money (M-Pesa/Tigo)')}</option>
-                        <option value="Split">{t('Split Payments 🔄')}</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-gray-400 uppercase">{t('Payment Status')}</label>
-                      <select
-                        value={paymentStatus}
-                        onChange={(e) => setPaymentStatus(e.target.value as 'Paid' | 'Credit' | 'Partial')}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-white font-semibold outline-none"
-                      >
-                        <option value="Paid">{t('Paid in Full')}</option>
-                        <option value="Credit">{t('Credit / On Account')}</option>
-                        <option value="Partial">{t('Partial Deposit')}</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Split payments inputs */}
-                  {paymentMethod === 'Split' && (
-                    <div className="space-y-1.5 pt-2 border-t mt-2">
-                      <span className="text-[9px] font-extrabold text-indigo-600 uppercase block">{t('Split Breakdown')}</span>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <div className="space-y-0.5">
-                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Cash')}</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0"
-                            value={cashAmount || ''}
-                            onChange={(e) => setCashAmount(parseFloat(e.target.value) || 0)}
-                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
-                          />
-                        </div>
-                        <div className="space-y-0.5">
-                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Bank')}</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0"
-                            value={bankAmount || ''}
-                            onChange={(e) => setBankAmount(parseFloat(e.target.value) || 0)}
-                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
-                          />
-                        </div>
-                        <div className="space-y-0.5">
-                          <label className="text-[8px] font-bold text-gray-400 uppercase">{t('Mobile')}</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0"
-                            value={mobileAmount || ''}
-                            onChange={(e) => setMobileAmount(parseFloat(e.target.value) || 0)}
-                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-bold font-mono outline-none"
-                          />
-                        </div>
-                      </div>
-                      <div className="text-[10px] font-bold text-indigo-500 mt-1 flex justify-between font-mono">
-                        <span>{t('Total Split Paid')}:</span>
-                        <span>{formatMoney(cashAmount + bankAmount + mobileAmount, settings.currency, settings.exchangeRate)}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Partial payment inputs */}
-                  {paymentStatus === 'Partial' && paymentMethod !== 'Split' && (
-                    <div className="space-y-1 pt-2 border-t mt-2">
-                      <label className="text-[9px] font-bold text-gray-400 uppercase">
-                        {paymentMethod === 'Cash' ? t('Amount Paid (Cash)') : (paymentMethod === 'Bank' ? t('Amount Paid (Bank)') : t('Amount Paid (Mobile)'))}
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="Enter deposit amount"
-                        value={paymentMethod === 'Cash' ? cashAmount || '' : (paymentMethod === 'Bank' ? bankAmount || '' : mobileAmount || '')}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          if (paymentMethod === 'Cash') setCashAmount(val);
-                          else if (paymentMethod === 'Bank') setBankAmount(val);
-                          else setMobileAmount(val);
-                        }}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-semibold font-mono outline-none focus:border-brand"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Grand Summary Calculations and Submission */}
-            <div className="pt-4 border-t space-y-3 mt-4 bg-gray-50">
-              <div className="space-y-1.5 text-xs font-semibold">
+            {/* Grand Summary Calculations and Fixed Bottom Buttons */}
+            <div className="pt-3 border-t space-y-3 mt-2 bg-gray-50 flex-shrink-0 sticky bottom-0 z-10">
+              <div className="space-y-1.5 text-xs font-semibold bg-white p-3 rounded-xl border border-gray-200/80 shadow-2xs">
                 <div className="flex justify-between text-gray-500">
                   <span>{t('Items Count')}</span>
-                  <span>{cart.reduce((sum, item) => sum + item.qty, 0)} units</span>
+                  <span className="font-bold text-gray-900">{cart.reduce((sum, item) => sum + item.qty, 0)} units</span>
                 </div>
-                <div className="flex justify-between text-gray-900 font-bold text-sm">
+                <div className="flex justify-between text-gray-900 font-bold text-sm pt-1 border-t border-gray-100">
                   <span>{t('GRAND TOTAL')}</span>
-                  <span className="text-brand">
-                    {formatMoney(totals.total, settings.currency, settings.exchangeRate)}
+                  <span className="text-brand font-black text-base">
+                    {formatMoney(totals.total, activeCurrency, activeExchangeRate)}
                   </span>
                 </div>
-                <div className="flex justify-between text-[10px] text-green-600 font-bold">
-                  <span>Estimated Profit</span>
-                  <span>+{formatMoney(totals.profit, settings.currency, settings.exchangeRate)}</span>
+                <div className="flex justify-between items-center text-xs text-emerald-800 bg-emerald-50/80 p-2 rounded-xl border border-emerald-200 mt-1">
+                  <div className="flex items-center gap-1.5 font-extrabold">
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>{t('Estimated Gross Profit')}</span>
+                  </div>
+                  <div className="flex items-center gap-2 font-black">
+                    <span className="text-emerald-700">+{formatMoney(totals.profit, activeCurrency, activeExchangeRate)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowProfitBreakdownModal(true)}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                      title={t('View step-by-step profit & COGS calculation breakdown')}
+                    >
+                      <Info className="w-3 h-3" />
+                      {t('Breakdown')}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1842,7 +2113,7 @@ export default function POSModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 py-2.5 border rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-100 bg-white"
+                  className="flex-1 py-2.5 border border-gray-300 rounded-xl text-xs font-extrabold text-gray-700 hover:bg-gray-100 bg-white shadow-xs transition"
                 >
                   {t('Cancel')}
                 </button>
@@ -1850,8 +2121,9 @@ export default function POSModal({
                   type="button"
                   onClick={handleCheckout}
                   disabled={cart.length === 0 || isCreditExceeded}
-                  className="flex-2 py-2.5 bg-brand hover:bg-brand-hover text-white font-bold rounded-lg text-xs uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider shadow-md transition flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
                 >
+                  <CheckCircle className="w-4 h-4" />
                   {t('Complete Checkout')}
                 </button>
               </div>
@@ -1877,15 +2149,15 @@ export default function POSModal({
                 <div className="bg-slate-50 p-4 rounded-xl space-y-2 text-xs font-semibold">
                   <div className="flex justify-between">
                     <span className="text-gray-400">{t('Opening Float')}:</span>
-                    <span className="font-bold text-gray-900">{formatMoney(activeShift.openingFloat, settings.currency, settings.exchangeRate)}</span>
+                    <span className="font-bold text-gray-900">{formatMoney(activeShift.openingFloat, activeCurrency, activeExchangeRate)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-400">{t('Total Shift Cash Sales')}:</span>
-                    <span className="font-bold text-emerald-600">+{formatMoney(activeShift.expectedCashSales || 0, settings.currency, settings.exchangeRate)}</span>
+                    <span className="font-bold text-emerald-600">+{formatMoney(activeShift.expectedCashSales || 0, activeCurrency, activeExchangeRate)}</span>
                   </div>
                   <div className="flex justify-between border-t pt-2 font-black text-gray-900">
                     <span>{t('Expected Total Drawer Cash')}:</span>
-                    <span>{formatMoney(activeShift.openingFloat + (activeShift.expectedCashSales || 0), settings.currency, settings.exchangeRate)}</span>
+                    <span>{formatMoney(activeShift.openingFloat + (activeShift.expectedCashSales || 0), activeCurrency, activeExchangeRate)}</span>
                   </div>
                 </div>
 
@@ -1902,7 +2174,7 @@ export default function POSModal({
                     </button>
                   </div>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{settings.currency}</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{activeCurrency}</span>
                     <input
                       type="number"
                       value={closingCashActualStr}
@@ -1934,7 +2206,7 @@ export default function POSModal({
                     }`}>
                       <div className="flex justify-between items-center">
                         <span>{t('Expected Drawer Cash')}:</span>
-                        <span>{formatMoney(expectedTotal, settings.currency, settings.exchangeRate)}</span>
+                        <span>{formatMoney(expectedTotal, activeCurrency, activeExchangeRate)}</span>
                       </div>
                       <div className="flex justify-between items-center border-t border-current/10 pt-1.5 mt-1.5 font-bold">
                         <span>{t('Discrepancy Status')}:</span>
@@ -1943,10 +2215,10 @@ export default function POSModal({
                             <span className="text-emerald-700">✓ {t('Balanced')}</span>
                           )}
                           {discrepancy > 0 && (
-                            <span className="text-blue-700">+{formatMoney(discrepancy, settings.currency, settings.exchangeRate)} ({t('Overage')})</span>
+                            <span className="text-blue-700">+{formatMoney(discrepancy, activeCurrency, activeExchangeRate)} ({t('Overage')})</span>
                           )}
                           {discrepancy < 0 && (
-                            <span className="text-red-700">{formatMoney(discrepancy, settings.currency, settings.exchangeRate)} ({t('Shortage')})</span>
+                            <span className="text-red-700">{formatMoney(discrepancy, activeCurrency, activeExchangeRate)} ({t('Shortage')})</span>
                           )}
                         </span>
                       </div>
@@ -1985,6 +2257,142 @@ export default function POSModal({
                     {t('Close Session & Reconcile')}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Profit & COGS Calculation Breakdown Modal */}
+        {showProfitBreakdownModal && (
+          <div className="fixed inset-0 z-55 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-fadeIn">
+              <div className="px-5 py-4 border-b flex items-center justify-between bg-emerald-900 text-white shrink-0">
+                <div className="flex items-center gap-2">
+                  <Calculator className="w-5 h-5 text-emerald-300" />
+                  <div>
+                    <h3 className="font-bold text-sm">{t('Profit & COGS Calculation Breakdown')}</h3>
+                    <span className="text-[11px] text-emerald-200 block">{t('Transparent step-by-step cost & margin derivation')}</span>
+                  </div>
+                </div>
+                <button onClick={() => setShowProfitBreakdownModal(false)} className="p-1 hover:bg-white/10 rounded-lg text-white transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-4">
+                {/* Top Formula Banner */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-950 font-extrabold text-xs">
+                    <TrendingUp className="w-4 h-4 text-emerald-600" />
+                    <span>{t('Profit Calculation Formula')}</span>
+                  </div>
+                  <p className="text-xs text-emerald-900 font-mono leading-relaxed">
+                    <strong>{t('Gross Profit')}</strong> = {t('Total Sales Revenue')} ({formatMoney(totals.total, activeCurrency, activeExchangeRate)}) − {t('Cost of Goods Sold (COGS)')} ({formatMoney(totals.cost, activeCurrency, activeExchangeRate)}) = <span className="text-emerald-700 font-extrabold">{formatMoney(totals.profit, activeCurrency, activeExchangeRate)}</span>
+                  </p>
+                  <p className="text-[11px] text-emerald-700 font-medium">
+                    💡 {t('COGS is calculated using First-In, First-Out (FIFO) inventory batches. Stock received earliest is consumed first.')}
+                  </p>
+                </div>
+
+                {/* Summary Metric Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-gray-50 border border-gray-200 p-3 rounded-xl">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase block">{t('Total Revenue')}</span>
+                    <span className="text-sm font-extrabold text-gray-900">{formatMoney(totals.total, activeCurrency, activeExchangeRate)}</span>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl">
+                    <span className="text-[10px] font-bold text-amber-700 uppercase block">{t('Total COGS Cost')}</span>
+                    <span className="text-sm font-extrabold text-amber-950">{formatMoney(totals.cost, activeCurrency, activeExchangeRate)}</span>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl">
+                    <span className="text-[10px] font-bold text-emerald-700 uppercase block">{t('Net Gross Profit')}</span>
+                    <span className="text-sm font-extrabold text-emerald-700">+{formatMoney(totals.profit, activeCurrency, activeExchangeRate)}</span>
+                  </div>
+                  <div className="bg-indigo-50 border border-indigo-200 p-3 rounded-xl">
+                    <span className="text-[10px] font-bold text-indigo-700 uppercase block">{t('Profit Margin %')}</span>
+                    <span className="text-sm font-extrabold text-indigo-900">
+                      {totals.total > 0 ? ((totals.profit / totals.total) * 100).toFixed(1) : 0}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Itemized Table */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 font-bold text-xs text-gray-800">
+                    {t('Itemized Product Cost & Profit Attribution')} ({cart.length} {t('items in cart')})
+                  </div>
+
+                  {cart.length === 0 ? (
+                    <div className="p-6 text-center text-gray-400 text-xs">
+                      {t('Cart is empty. Add products to view profit breakdown.')}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-100">
+                      {cart.map((c, i) => {
+                        const item = stockItems.find(p => p.id === c.productId);
+                        if (!item) return null;
+
+                        const isSubUnit = c.unitType === 'sub';
+                        const conversion = isSubUnit ? 1 : (item.useSubUnitPricing ? (item.subUnitConversion || 1) : 1);
+                        const baseQtyRequired = c.qty * conversion;
+
+                        const fifoBreakdown = getFIFOBatchBreakdown(item, selectedStoreId, baseQtyRequired);
+                        const lineRevenue = c.price * c.qty;
+                        const lineCost = fifoBreakdown.totalCost;
+                        const lineProfit = lineRevenue - lineCost;
+                        const marginPct = lineRevenue > 0 ? ((lineProfit / lineRevenue) * 100).toFixed(1) : '0';
+
+                        return (
+                          <div key={i} className="p-3.5 space-y-2 hover:bg-gray-50/60 transition">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <span className="font-extrabold text-xs text-gray-900 block">{item.name} ({item.code})</span>
+                                <span className="text-[10px] text-gray-500 font-medium">
+                                  {t('Selling')}: {c.qty} {c.unitType === 'sub' ? item.subUnitName : (item.unit || 'units')} @ {formatMoney(c.price, activeCurrency, activeExchangeRate)}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-extrabold text-xs text-emerald-700 block">
+                                  {lineProfit >= 0 ? '+' : ''}{formatMoney(lineProfit, activeCurrency, activeExchangeRate)} ({marginPct}% {t('margin')})
+                                </span>
+                                <span className="text-[10px] text-gray-500 font-mono">
+                                  {t('Rev')}: {formatMoney(lineRevenue, activeCurrency, activeExchangeRate)} | {t('COGS')}: {formatMoney(lineCost, activeCurrency, activeExchangeRate)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* FIFO Batch Sources details */}
+                            <div className="bg-purple-50/60 border border-purple-100 rounded-lg p-2 text-[10px] text-purple-950 space-y-1 font-mono">
+                              <span className="font-bold text-purple-700 block flex items-center gap-1">
+                                <Layers className="w-3 h-3 text-purple-600" />
+                                {t('Cost Origin (FIFO Batch Trace)')}:
+                              </span>
+                              <div className="space-y-0.5 pl-4">
+                                {fifoBreakdown.batchContributions.map((b, idx) => (
+                                  <div key={idx} className="flex justify-between">
+                                    <span>
+                                      • {b.poNumber} ({b.qtyDeducted} {item.unit || 'units'} @ {formatMoney(b.unitCost, activeCurrency, activeExchangeRate)})
+                                    </span>
+                                    <span className="font-bold">{formatMoney(b.totalCost, activeCurrency, activeExchangeRate)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="px-5 py-3 border-t bg-gray-50 flex justify-end shrink-0">
+                <button
+                  onClick={() => setShowProfitBreakdownModal(false)}
+                  className="bg-gray-900 hover:bg-gray-800 text-white font-bold text-xs px-4 py-2 rounded-xl transition"
+                >
+                  {t('Close')}
+                </button>
               </div>
             </div>
           </div>
