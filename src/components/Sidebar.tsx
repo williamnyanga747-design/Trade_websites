@@ -40,32 +40,101 @@ export default function Sidebar({
   const isReportActive = ['report-transaction', 'report-financial', 'report-daily', 'report-monthly', 'report-sales', 'report-purchase', 'report-sales-outstanding', 'report-purchase-outstanding', 'report-lowstock', 'report-po-details', 'report-shifts', 'report-unit-velocity'].includes(currentPage);
   const isUserActive = ['user-info', 'user-access'].includes(currentPage);
 
+  const isSuperAdmin = currentUser?.role === 'Super Admin';
+  const isAdmin = currentUser?.role === 'Admin' || isSuperAdmin;
+  const isAllowed = (page: string) => allowedPages.includes(page);
+  const t = (text: string) => translate(text, language || settings.language || 'en');
+
   const [showMasters, setShowMasters] = useState(isMasterActive);
   const [showImports, setShowImports] = useState(isImportActive);
   const [showReports, setShowReports] = useState(isReportActive);
   const [showUsers, setShowUsers] = useState(isUserActive);
 
-  // Sync menu states on navigate to a submenu item
+  // Sync accordion state on currentPage change so only the relevant submenu is expanded
   useEffect(() => {
-    if (isMasterActive) setShowMasters(true);
-  }, [isMasterActive]);
+    if (isMasterActive) {
+      setShowMasters(true);
+      setShowImports(false);
+      setShowReports(false);
+      setShowUsers(false);
+    } else if (isImportActive) {
+      setShowImports(true);
+      setShowMasters(false);
+      setShowReports(false);
+      setShowUsers(false);
+    } else if (isReportActive) {
+      setShowReports(true);
+      setShowMasters(false);
+      setShowImports(false);
+      setShowUsers(false);
+    } else if (isUserActive) {
+      setShowUsers(true);
+      setShowMasters(false);
+      setShowImports(false);
+      setShowReports(false);
+    } else {
+      setShowMasters(false);
+      setShowImports(false);
+      setShowReports(false);
+      setShowUsers(false);
+    }
+  }, [currentPage]);
 
-  useEffect(() => {
-    if (isImportActive) setShowImports(true);
-  }, [isImportActive]);
+  const toggleMasters = () => {
+    if (isCollapsed && onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      const next = !showMasters;
+      setShowMasters(next);
+      if (next) {
+        setShowImports(false);
+        setShowReports(false);
+        setShowUsers(false);
+      }
+    }
+  };
 
-  useEffect(() => {
-    if (isReportActive) setShowReports(true);
-  }, [isReportActive]);
+  const toggleImports = () => {
+    if (isCollapsed && onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      const next = !showImports;
+      setShowImports(next);
+      if (next) {
+        setShowMasters(false);
+        setShowReports(false);
+        setShowUsers(false);
+      }
+    }
+  };
 
-  useEffect(() => {
-    if (isUserActive) setShowUsers(true);
-  }, [isUserActive]);
+  const toggleReports = () => {
+    if (isCollapsed && onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      const next = !showReports;
+      setShowReports(next);
+      if (next) {
+        setShowMasters(false);
+        setShowImports(false);
+        setShowUsers(false);
+      }
+    }
+  };
 
-  const isSuperAdmin = currentUser?.role === 'Super Admin';
-  const isAdmin = currentUser?.role === 'Admin' || isSuperAdmin;
-  const isAllowed = (page: string) => allowedPages.includes(page);
-  const t = (text: string) => translate(text, language || settings.language || 'en');
+  const toggleUsers = () => {
+    if (isCollapsed && onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      const next = !showUsers;
+      setShowUsers(next);
+      if (next) {
+        setShowMasters(false);
+        setShowImports(false);
+        setShowReports(false);
+      }
+    }
+  };
 
   return (
     <aside className={`${isCollapsed ? 'w-[70px]' : 'w-64'} bg-[#2d323e] text-gray-200 flex flex-col h-full flex-shrink-0 border-r border-gray-800/20 no-print transition-all duration-300`}>
@@ -188,13 +257,7 @@ export default function Sidebar({
         {(isAllowed('companies') || isAllowed('branches') || isAllowed('stores') || isAllowed('customers') || isAllowed('suppliers') || isAllowed('categories') || isAllowed('taxes') || isAllowed('data-recovery') || isAllowed('exchange-rate')) && (
           <div className="pt-2">
             <button
-              onClick={() => {
-                if (isCollapsed && onToggleCollapse) {
-                  onToggleCollapse();
-                } else {
-                  setShowMasters(!showMasters);
-                }
-              }}
+              onClick={toggleMasters}
               className={`w-full flex items-center ${isCollapsed ? 'justify-center py-2.5' : 'justify-between px-3 py-2'} rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 font-semibold`}
               title={isCollapsed ? t('Master Data') : undefined}
             >
@@ -305,13 +368,7 @@ export default function Sidebar({
         {(isAllowed('import-stock') || isAllowed('import-customers') || isAllowed('import-suppliers')) && (
           <div>
             <button
-              onClick={() => {
-                if (isCollapsed && onToggleCollapse) {
-                  onToggleCollapse();
-                } else {
-                  setShowImports(!showImports);
-                }
-              }}
+              onClick={toggleImports}
               className={`w-full flex items-center ${isCollapsed ? 'justify-center py-2.5' : 'justify-between px-3 py-2'} rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 font-semibold`}
               title={isCollapsed ? t('Import Data') : undefined}
             >
@@ -362,13 +419,7 @@ export default function Sidebar({
         {isAllowed('report-transaction') && (
           <div>
             <button
-              onClick={() => {
-                if (isCollapsed && onToggleCollapse) {
-                  onToggleCollapse();
-                } else {
-                  setShowReports(!showReports);
-                }
-              }}
+              onClick={toggleReports}
               className={`w-full flex items-center ${isCollapsed ? 'justify-center py-2.5' : 'justify-between px-3 py-2'} rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 font-semibold`}
               title={isCollapsed ? t('Reports') : undefined}
             >
@@ -483,6 +534,27 @@ export default function Sidebar({
                     {t('Purchase Order Details')}
                   </button>
                 )}
+
+                {/* Tax & VAT Return Summary */}
+                <button
+                  onClick={() => onNavigate('report-tax-vat')}
+                  className={`w-full text-left px-3 py-1.5 rounded transition ${
+                    currentPage === 'report-tax-vat' ? 'text-white font-bold text-xs' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  📊 Tax & VAT Return Summary
+                </button>
+
+                {/* AI Demand Forecasting & Fraud Detector */}
+                <button
+                  onClick={() => onNavigate('report-predictive-ai')}
+                  className={`w-full text-left px-3 py-1.5 rounded transition flex items-center justify-between ${
+                    currentPage === 'report-predictive-ai' ? 'text-white font-bold text-xs bg-indigo-600/30' : 'text-indigo-300 hover:text-white'
+                  }`}
+                >
+                  <span className="flex items-center gap-1">✨ AI Predictive & Fraud</span>
+                  <span className="text-[9px] bg-indigo-500 text-white font-black px-1.5 py-0.2 rounded-full">AI</span>
+                </button>
                 {isAllowed('report-shifts') && (
                   <button
                     onClick={() => onNavigate('report-shifts')}
@@ -512,13 +584,7 @@ export default function Sidebar({
         {isAllowed('user-info') && (
           <div>
             <button
-              onClick={() => {
-                if (isCollapsed && onToggleCollapse) {
-                  onToggleCollapse();
-                } else {
-                  setShowUsers(!showUsers);
-                }
-              }}
+              onClick={toggleUsers}
               className={`w-full flex items-center ${isCollapsed ? 'justify-center py-2.5' : 'justify-between px-3 py-2'} rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 font-semibold`}
               title={isCollapsed ? t('Manage User') : undefined}
             >

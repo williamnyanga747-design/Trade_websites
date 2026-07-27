@@ -10,6 +10,7 @@ interface ProfileProps {
   saveAllData: (updatedFields: any) => void;
   users: User[];
   logAction: (action: string, details: string) => void;
+  onOpenGame?: () => void;
 }
 
 export default function Profile({
@@ -18,7 +19,8 @@ export default function Profile({
   onLogout,
   saveAllData,
   users,
-  logAction
+  logAction,
+  onOpenGame
 }: ProfileProps) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -76,10 +78,18 @@ export default function Profile({
     <div className="max-w-xl mx-auto mt-8 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden overflow-y-auto max-h-[85vh] scrollbar-thin">
       <div className="h-32 bg-gradient-to-r from-brand to-brand-hover"></div>
       <div className="px-6 pb-6 relative">
-        <div className="w-20 h-20 bg-white rounded-full p-1 -mt-10 mb-4 shadow-lg flex items-center justify-center">
-          <div className="w-full h-full bg-gray-100 rounded-full flex items-center justify-center text-2xl font-bold text-brand">
-            {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
-          </div>
+        <div className="w-20 h-20 bg-white rounded-full p-1 -mt-10 mb-4 shadow-lg flex items-center justify-center relative group">
+          <button
+            type="button"
+            onClick={onOpenGame}
+            className="w-full h-full bg-gradient-to-tr from-indigo-600 via-brand to-purple-600 rounded-full flex flex-col items-center justify-center text-3xl font-black text-white shadow-md hover:scale-105 active:scale-95 transition cursor-pointer relative overflow-hidden group border-2 border-white"
+            title={t('Click this avatar letter to play the Mind Refresh Arcade Game!')}
+          >
+            <span>{currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}</span>
+            <span className="text-[8px] font-extrabold text-amber-300 uppercase tracking-tighter opacity-90 group-hover:opacity-100 transition-opacity -mt-1">
+              🎮 {t('Game')}
+            </span>
+          </button>
         </div>
         <h2 className="text-xl font-bold text-gray-900">{currentUser.name}</h2>
         <div className="text-sm font-semibold text-brand mb-6">{t(currentUser.role)}</div>

@@ -414,7 +414,20 @@ export default function ArcadeGameModal({ isOpen, onClose, userName }: ArcadeGam
 
   if (!isOpen) return null;
 
+  const ensureAudioActive = () => {
+    if (!audioCtxRef.current) {
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioContextClass) {
+        audioCtxRef.current = new AudioContextClass();
+      }
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+  };
+
   const restartGame = () => {
+    ensureAudioActive();
     gameStateRef.current = {
       player_x: 60,
       player_y: 168,
@@ -433,6 +446,7 @@ export default function ArcadeGameModal({ isOpen, onClose, userName }: ArcadeGam
 
   const handleTouchLeftStart = (e: React.SyntheticEvent) => {
     e.preventDefault();
+    ensureAudioActive();
     if (!isPowerOn) return;
     gameStateRef.current.moveLeft = true;
     setPressedLeft(true);
@@ -445,6 +459,7 @@ export default function ArcadeGameModal({ isOpen, onClose, userName }: ArcadeGam
 
   const handleTouchRightStart = (e: React.SyntheticEvent) => {
     e.preventDefault();
+    ensureAudioActive();
     if (!isPowerOn) return;
     gameStateRef.current.moveRight = true;
     setPressedRight(true);
@@ -456,7 +471,7 @@ export default function ArcadeGameModal({ isOpen, onClose, userName }: ArcadeGam
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 animate-fadeIn">
+    <div onClick={ensureAudioActive} className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 animate-fadeIn">
       <div className="relative flex flex-col items-center">
         {/* Top Control Bar */}
         <div className="w-full max-w-[380px] flex items-center justify-between mb-2 text-white">

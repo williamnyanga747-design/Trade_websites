@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { handlePrintWithFallback } from '../utils/printHelper';
+import { TaxVatReport } from './TaxVatReport';
+import { PredictiveForecasting } from './PredictiveForecasting';
 
 interface ReportsProps {
   currentPage: string;
@@ -80,6 +82,91 @@ export default function Reports({
 
   // Month state for Monthly report
   const [selectedMonth, setSelectedMonth] = useState(todayStr.substring(0, 7));
+
+  // Global report date filter states
+  const [reportStartDate, setReportStartDate] = useState<string>('');
+  const [reportEndDate, setReportEndDate] = useState<string>('');
+
+  const renderDateFilterBar = () => (
+    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <div className="flex items-center gap-1.5 font-semibold text-gray-700">
+          <Calendar className="w-4 h-4 text-brand" />
+          <span>{t('Filter by Date Range')}:</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <input
+            type="date"
+            value={reportStartDate}
+            onChange={(e) => setReportStartDate(e.target.value)}
+            className="px-2.5 py-1 border rounded-lg text-xs bg-white font-medium text-gray-800 outline-none focus:ring-2 focus:ring-brand/30"
+          />
+          <span className="text-gray-400 font-bold">-</span>
+          <input
+            type="date"
+            value={reportEndDate}
+            onChange={(e) => setReportEndDate(e.target.value)}
+            className="px-2.5 py-1 border rounded-lg text-xs bg-white font-medium text-gray-800 outline-none focus:ring-2 focus:ring-brand/30"
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <button
+          type="button"
+          onClick={() => {
+            setReportStartDate(todayStr);
+            setReportEndDate(todayStr);
+          }}
+          className="px-2.5 py-1 text-xs font-bold rounded-lg border bg-white hover:bg-gray-100 text-gray-700 transition"
+        >
+          {t('Today')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const d = new Date();
+            d.setDate(d.getDate() - 7);
+            setReportStartDate(d.toISOString().split('T')[0]);
+            setReportEndDate(todayStr);
+          }}
+          className="px-2.5 py-1 text-xs font-bold rounded-lg border bg-white hover:bg-gray-100 text-gray-700 transition"
+        >
+          {t('Last 7 Days')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const d = new Date();
+            d.setDate(d.getDate() - 30);
+            setReportStartDate(d.toISOString().split('T')[0]);
+            setReportEndDate(todayStr);
+          }}
+          className="px-2.5 py-1 text-xs font-bold rounded-lg border bg-white hover:bg-gray-100 text-gray-700 transition"
+        >
+          {t('Last 30 Days')}
+        </button>
+        {(reportStartDate || reportEndDate) && (
+          <button
+            type="button"
+            onClick={() => {
+              setReportStartDate('');
+              setReportEndDate('');
+            }}
+            className="px-2.5 py-1 text-xs font-bold rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition"
+          >
+            {t('Clear Filter')}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const isWithinDateRange = (dateStr?: string) => {
+    if (!dateStr) return true;
+    if (reportStartDate && dateStr < reportStartDate) return false;
+    if (reportEndDate && dateStr > reportEndDate) return false;
+    return true;
+  };
 
   // Shift ledger states
   const [selectedShiftStoreId, setSelectedShiftStoreId] = useState<string>('all');
@@ -307,13 +394,14 @@ export default function Reports({
     );
   };
 
-  // 2. Daily Activity Report (Today)
+  // 2. Daily Activity Report
   const renderReportDaily = () => {
-    const sales = salesOrders.filter(o => o.date === todayStr && o.storeId === storeId);
-    const pos = purchaseOrders.filter(o => o.date === todayStr && o.status === 'Received' && o.storeId === storeId);
+    const sales = salesOrders.filter(o => o.storeId === storeId && isWithinDateRange(o.date));
+    const pos = purchaseOrders.filter(o => o.storeId === storeId && o.status === 'Received' && isWithinDateRange(o.date));
 
     return (
       <div className="space-y-6">
+        {renderDateFilterBar()}
         <div className="grid grid-cols-2 gap-4">
           <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
             <div className="text-xs font-bold text-emerald-800 uppercase tracking-wider mb-1">{t('Total Sales')}</div>
@@ -443,12 +531,13 @@ export default function Reports({
 
   // 4. Sales Report
   const renderReportSales = () => {
-    const sales = salesOrders.filter(so => so.storeId === storeId);
+    const sales = salesOrders.filter(so => so.storeId === storeId && isWithinDateRange(so.date));
     const totalSales = sales.reduce((sum, o) => sum + o.total, 0);
     const totalProfit = sales.reduce((sum, o) => sum + o.profit, 0);
 
     return (
       <div className="space-y-6">
+        {renderDateFilterBar()}
         <div className="grid grid-cols-2 gap-4">
           <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
             <div className="text-xs font-bold text-gray-400 mb-1">{t('Total Sales')}</div>
@@ -468,11 +557,12 @@ export default function Reports({
 
   // 5. Purchase Report
   const renderReportPurchase = () => {
-    const pos = purchaseOrders.filter(po => po.storeId === storeId);
+    const pos = purchaseOrders.filter(po => po.storeId === storeId && isWithinDateRange(po.date));
     const total = pos.reduce((sum, o) => sum + o.total, 0);
 
     return (
       <div className="space-y-6">
+        {renderDateFilterBar()}
         <div className="p-4 bg-gray-50 rounded-xl border border-gray-100 w-full md:w-1/2">
           <div className="text-xs font-bold text-gray-400 mb-1">{t('Total Purchases')}</div>
           <div className="text-2xl font-black text-gray-900">{fmt(total)}</div>
@@ -539,10 +629,12 @@ export default function Reports({
 
   // 7. Purchase Outstanding (Payables)
   const renderReportPurchaseOutstanding = () => {
-    const out = purchaseOrders.filter(po => po.status === 'Pending' && po.storeId === storeId);
+    const out = purchaseOrders.filter(po => po.status === 'Pending' && po.storeId === storeId && isWithinDateRange(po.date));
 
     return (
-      <div className="overflow-x-auto border rounded-xl">
+      <div className="space-y-4">
+        {renderDateFilterBar()}
+        <div className="overflow-x-auto border rounded-xl">
         <table id="purchase-out-table" className="w-full text-[13px] text-left">
           <thead className="bg-gray-50 border-b text-gray-500 text-[10px] uppercase font-bold tracking-wider">
             <tr>
@@ -571,8 +663,9 @@ export default function Reports({
           </tbody>
         </table>
       </div>
-    );
-  };
+    </div>
+  );
+};
 
   // 8. Low Stock Items Report
   const renderReportLowStock = () => {
@@ -594,7 +687,8 @@ export default function Reports({
           <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
             {lowStockItems.map(p => {
               const qty = p.stock?.[storeId] || 0;
-              const value = qty * p.purchasePrice;
+              const mainQty = p.useSubUnitPricing ? qty / (p.subUnitConversion || 1) : qty;
+              const value = mainQty * p.purchasePrice;
               return (
                 <tr key={p.id} className="hover:bg-red-50/30">
                   <td className="p-3 font-bold text-gray-900">{p.name}</td>
@@ -623,10 +717,12 @@ export default function Reports({
 
   // 9. Purchase Order Details Report
   const renderReportPODetails = () => {
-    const pos = purchaseOrders.filter(po => po.storeId === storeId);
+    const pos = purchaseOrders.filter(po => po.storeId === storeId && isWithinDateRange(po.date));
 
     return (
-      <div className="overflow-x-auto border rounded-xl">
+      <div className="space-y-4">
+        {renderDateFilterBar()}
+        <div className="overflow-x-auto border rounded-xl">
         <table id="po-details-table" className="w-full text-[13px] text-left">
           <thead className="bg-gray-50 border-b text-gray-500 text-[10px] uppercase font-bold tracking-wider">
             <tr>
@@ -665,8 +761,9 @@ export default function Reports({
           </tbody>
         </table>
       </div>
-    );
-  };
+    </div>
+  );
+};
 
   // --- GENERAL INNER HTML TABLE BUILDERS ---
 
@@ -759,7 +856,8 @@ export default function Reports({
       const storeMatch = selectedShiftStoreId === 'all' || s.storeId === Number(selectedShiftStoreId);
       const userMatch = selectedShiftUserId === 'all' || s.userId === Number(selectedShiftUserId);
       const statusMatch = selectedShiftStatus === 'all' || s.status === selectedShiftStatus;
-      return storeMatch && userMatch && statusMatch;
+      const dateMatch = isWithinDateRange(s.openTime ? s.openTime.split('T')[0] : '');
+      return storeMatch && userMatch && statusMatch && dateMatch;
     });
 
     const totalSessions = filteredShifts.length;
@@ -775,6 +873,7 @@ export default function Reports({
 
     return (
       <div className="space-y-6">
+        {renderDateFilterBar()}
         {/* Summary KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 no-print">
           <div className="bg-slate-50 border p-4 rounded-xl flex items-center justify-between">
@@ -1006,8 +1105,10 @@ export default function Reports({
 
   const renderReportUnitVelocity = () => {
     // 1. Calculate analyzed duration
-    const startMs = new Date(txStartDate).getTime();
-    const endMs = new Date(txEndDate).getTime();
+    const effStart = reportStartDate || txStartDate;
+    const effEnd = reportEndDate || txEndDate;
+    const startMs = new Date(effStart).getTime();
+    const endMs = new Date(effEnd).getTime();
     const msDiff = endMs - startMs;
     const daysCount = Math.max(1, Math.ceil(msDiff / (1000 * 60 * 60 * 24)) + 1);
 
@@ -1015,7 +1116,7 @@ export default function Reports({
     const filteredOrders = salesOrders.filter(o => {
       if (o.status === 'Voided') return false;
       const orderDate = o.date; // YYYY-MM-DD
-      const dateInRange = orderDate >= txStartDate && orderDate <= txEndDate;
+      const dateInRange = orderDate >= effStart && orderDate <= effEnd;
       const storeMatch = velocityStoreId === 'all' || o.storeId === Number(velocityStoreId);
       return dateInRange && storeMatch;
     });
@@ -1434,6 +1535,12 @@ export default function Reports({
   } else if (currentPage === 'report-shifts') {
     currentTableId = 'report-shifts-table';
     reportTitle = t('POS Shift & Drawer Ledger');
+  } else if (currentPage === 'report-tax-vat') {
+    currentTableId = 'tax-vat-summary-table';
+    reportTitle = t('Official Tax & VAT Filing Summary');
+  } else if (currentPage === 'report-predictive-ai') {
+    currentTableId = 'ai-predictive-table';
+    reportTitle = t('AI Predictive Demand & Fraud Detector');
   }
 
   const renderContent = () => {
@@ -1449,6 +1556,26 @@ export default function Reports({
       case 'report-lowstock': return renderReportLowStock();
       case 'report-po-details': return renderReportPODetails();
       case 'report-shifts': return renderReportShifts();
+      case 'report-tax-vat':
+        return (
+          <TaxVatReport
+            salesOrders={salesOrders}
+            purchaseOrders={purchaseOrders}
+            stores={stores}
+            taxes={[]}
+            currencySymbol={currency === 'TZS' ? 'TZS ' : '$'}
+          />
+        );
+      case 'report-predictive-ai':
+        return (
+          <PredictiveForecasting
+            stockItems={stockItems}
+            salesOrders={salesOrders}
+            posShifts={posShifts}
+            stores={stores}
+            currencySymbol={currency === 'TZS' ? 'TZS ' : '$'}
+          />
+        );
       default: return null;
     }
   };

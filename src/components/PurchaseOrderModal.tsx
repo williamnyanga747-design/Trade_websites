@@ -67,6 +67,7 @@ export default function PurchaseOrderModal({
       setSelectedSupplierId(activeSuppliersForStore[0].id);
     }
   }, [activeSuppliersForStore, selectedSupplierId]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [poItems, setPoItems] = useState<{ productId: number; qty: number; cost: number; discount?: number; unitType?: 'main' | 'sub'; subUnitName?: string }[]>([]);
   const [paymentTerms, setPaymentTerms] = useState<string>('Paid in Full');
@@ -264,6 +265,18 @@ export default function PurchaseOrderModal({
 
     onClose();
   };
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSubmit();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, poItems, selectedSupplierId, selectedStoreId, receiveImmediately, grandTotal, paymentTerms, stockItems, purchaseOrders]);
 
   if (!isOpen) return null;
 

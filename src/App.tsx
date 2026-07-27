@@ -2289,6 +2289,11 @@ export default function App() {
       adminPages.add('user-access');
       adminPages.add('dashboard'); // Always allow dashboard for Admins
       pages = Array.from(adminPages);
+    } else if (currentUser.role === 'Retailer' || currentUser.role === 'Wholesaler') {
+      // Restrict system settings for Retailer and Wholesaler unless explicitly granted in allowedPages
+      const settingPages = ['companies', 'branches', 'stores', 'taxes', 'data-recovery', 'exchange-rate', 'user-access', 'settings'];
+      const explicitlyAllowed = currentUser.allowedPages || [];
+      pages = pages.filter(p => !settingPages.includes(p) || explicitlyAllowed.includes(p));
     }
     
     if (pages.includes('report-transaction') && !pages.includes('report-unit-velocity')) {
@@ -2297,6 +2302,28 @@ export default function App() {
     
     return pages;
   }, [currentUser, rolePermissions]);
+
+  // Global Keyboard Shortcuts (Ctrl+S for Save, Alt+S for POS, Alt+P for Purchase Orders)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Alt + S or Ctrl + Shift + S => Open POS Terminal
+      if ((e.altKey && e.key.toLowerCase() === 's') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's')) {
+        e.preventDefault();
+        setShowSOModal(true);
+      }
+      // Alt + P or Ctrl + Shift + P => Open Purchase Order Modal
+      else if ((e.altKey && e.key.toLowerCase() === 'p') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p')) {
+        e.preventDefault();
+        setShowPOModal(true);
+      }
+      // Ctrl + S => Prevent default browser save dialog
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
   const t = (text: string) => translate(text, activeLanguage);
 
   // Helper variables for data fetching
@@ -2342,8 +2369,14 @@ export default function App() {
       }
       return activeStoreIds.reduce((sum, sId) => sum + (p.stock?.[sId] || 0), 0);
     };
+
+    const getItemValuation = (p: StockItem) => {
+      const rawQty = storeStock(p);
+      const mainQty = p.useSubUnitPricing ? rawQty / (p.subUnitConversion || 1) : rawQty;
+      return mainQty * p.purchasePrice;
+    };
     
-    const totalStockValue = activeStockItems.reduce((acc, p) => acc + storeStock(p) * p.purchasePrice, 0);
+    const totalStockValue = activeStockItems.reduce((acc, p) => acc + getItemValuation(p), 0);
     const lowStockItems = activeStockItems.filter(p => {
       if (storeId) {
         return (p.stock?.[storeId] || 0) <= p.lowStockQty;
@@ -2427,7 +2460,7 @@ export default function App() {
     const topProductsStockValue = [...activeStockItems]
       .map(p => ({
         name: p.name.length > 15 ? p.name.slice(0, 15) + '...' : p.name,
-        value: storeStock(p) * p.purchasePrice
+        value: getItemValuation(p)
       }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5);
@@ -2451,24 +2484,24 @@ export default function App() {
 
     return (
       <div className="space-y-6">
-        {/* Company Logo and Title Banner */}
+        {/* Company Logo and Title Banner (Centered) */}
         {userCompany && (
-          <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 animate-fade-in no-print">
+          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm flex flex-col sm:flex-row items-center justify-center gap-4 text-center animate-fade-in no-print mx-auto max-w-2xl">
             {userCompany.logoUrl ? (
               <img
                 src={userCompany.logoUrl}
                 alt={`${userCompany.name} Logo`}
-                className="w-14 h-14 rounded-xl object-contain bg-gray-50 border border-gray-200 shadow-inner"
+                className="w-16 h-16 rounded-xl object-contain bg-gray-50 border border-gray-200 shadow-inner shrink-0"
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center font-black text-xl shadow-md uppercase">
+              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center font-black text-2xl shadow-md uppercase shrink-0">
                 {userCompany.name.slice(0, 2)}
               </div>
             )}
-            <div>
-              <div className="text-[10px] font-bold text-brand tracking-wider uppercase mb-0.5">{t('Enterprise Workspace')}</div>
-              <h2 className="text-xl font-black text-gray-900 tracking-tight">
+            <div className="text-center sm:text-left">
+              <div className="text-[10px] font-extrabold text-brand tracking-widest uppercase mb-0.5">{t('Enterprise Workspace')}</div>
+              <h2 className="text-2xl font-black text-gray-900 tracking-tight">
                 {userCompany.name}
               </h2>
             </div>
@@ -2952,7 +2985,8 @@ export default function App() {
         const globalStock = Object.entries(p.stock || {})
           .filter(([sid]) => allowedStoreIds.includes(Number(sid)))
           .reduce((sum, [_, qty]) => sum + (Number(qty) || 0), 0);
-        const totalValue = globalStock * p.purchasePrice;
+        const mainGlobalStock = p.useSubUnitPricing ? globalStock / (p.subUnitConversion || 1) : globalStock;
+        const totalValue = mainGlobalStock * p.purchasePrice;
         
         tableHtml += `
           <tr>
@@ -3424,7 +3458,7 @@ export default function App() {
                         <td className="px-4 py-3 text-right text-amber-600">{formatMoney(p.wholesalePrice, activeCurrency, activeExchangeRate)}</td>
                         <td className="px-4 py-3 text-right text-indigo-600">{formatMoney(p.partnerPrice || p.retailPrice, activeCurrency, activeExchangeRate)}</td>
                         <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50/20">
-                          {formatMoney(globalStock * p.purchasePrice, activeCurrency, activeExchangeRate)}
+                          {formatMoney((p.useSubUnitPricing ? globalStock / (p.subUnitConversion || 1) : globalStock) * p.purchasePrice, activeCurrency, activeExchangeRate)}
                         </td>
                         {!isRetailer && (
                           <td className="px-4 py-3">
@@ -4071,6 +4105,7 @@ export default function App() {
             currency={activeCurrency}
             exchangeRate={activeExchangeRate}
             translate={t}
+            language={activeLanguage}
           />
         );
       case 'companies':
@@ -4191,6 +4226,13 @@ export default function App() {
             saveAllData={saveAllData}
             users={users}
             logAction={logAction}
+            onOpenGame={() => {
+              if (currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin' || settings.allowGamesEnabled !== false) {
+                setShowGameModal(true);
+              } else {
+                toast.info('Mind Refresh Game Breaks are currently disabled by Admin.');
+              }
+            }}
           />
         );
       // Fallback placeholders for reports, dynamic configurations etc.

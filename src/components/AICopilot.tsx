@@ -23,6 +23,7 @@ interface AICopilotProps {
   currency: string;
   exchangeRate: number;
   translate: (text: string) => string;
+  language?: string;
 }
 
 export default function AICopilot({
@@ -39,7 +40,8 @@ export default function AICopilot({
   suppliers = [],
   currency,
   exchangeRate,
-  translate: t
+  translate: t,
+  language = 'en'
 }: AICopilotProps) {
   // Resolve active company scope based on signed-in user and context
   const activeCompany = useMemo(() => {
@@ -93,11 +95,12 @@ export default function AICopilot({
           qty += (p.stock[stId] || 0);
         });
       } else {
-        qty = Object.values(p.stock).reduce((a, b) => a + b, 0);
+        qty = (Object.values(p.stock || {}) as number[]).reduce((a, b) => a + (Number(b) || 0), 0);
       }
       totalStockQty += qty;
-      stockValuationCost += qty * (p.purchasePrice || 0);
-      stockValuationRetail += qty * (p.retailPrice || 0);
+      const mainQty = p.useSubUnitPricing ? qty / (p.subUnitConversion || 1) : qty;
+      stockValuationCost += mainQty * (p.purchasePrice || 0);
+      stockValuationRetail += mainQty * (p.retailPrice || 0);
 
       if (qty <= (p.lowStockQty || 5)) {
         lowStockCount++;
@@ -120,7 +123,7 @@ export default function AICopilot({
     const uniqueCustomersInSales = new Set(companySales.map(s => s.customerId)).size;
     const repeatCustomers = customers.filter(c => companySales.filter(s => s.customerId === c.id).length > 1).length;
     const retentionRatePct = customers.length > 0 ? Math.min(100, Math.round((repeatCustomers / Math.max(1, customers.length)) * 100) + 45) : 85;
-    const csatScore = Math.min(5.0, Math.max(3.8, (4.2 + (grossMarginPct > 20 ? 0.4 : 0.1) + (lowStockCount === 0 ? 0.3 : -0.2))).toFixed(1));
+    const csatScore = Math.min(5.0, Math.max(3.8, parseFloat((4.2 + (grossMarginPct > 20 ? 0.4 : 0.1) + (lowStockCount === 0 ? 0.3 : -0.2)).toFixed(1))));
 
     return {
       totalProducts: companyProducts.length,
@@ -183,7 +186,8 @@ export default function AICopilot({
           products: companyProducts,
           sales: companySales,
           purchases: companyPurchases,
-          expenses: companyExpenses
+          expenses: companyExpenses,
+          language
         })
       });
 
@@ -203,43 +207,53 @@ export default function AICopilot({
 
   // Local rule-based intelligent advisor fallback
   const generateLocalAnalyticalAdvice = (query: string, selectedProductObj: StockItem | null | undefined) => {
-    let output = `### 🚀 Executive Intelligence Report for **${activeCompany.name}**\n\n`;
+    const isSwahili = language === 'sw';
+    let output = isSwahili 
+      ? `### 🚀 Ripoti ya Mkakati na Akili ya Biashara kwa **${activeCompany.name}**\n\n`
+      : `### 🚀 Executive Intelligence Report for **${activeCompany.name}**\n\n`;
 
     if (selectedProductObj) {
       const totalUnits = Object.values(selectedProductObj.stock).reduce((a, b) => a + b, 0);
       const margin = selectedProductObj.retailPrice > 0 ? (((selectedProductObj.retailPrice - selectedProductObj.purchasePrice) / selectedProductObj.retailPrice) * 100).toFixed(1) : '0';
 
-      output += `#### 📦 Dedicated Focus: **${selectedProductObj.name}** (Code: ${selectedProductObj.code})\n`;
-      output += `- **Current Total Stock**: **${totalUnits} ${selectedProductObj.unit}s** across company stores.\n`;
-      output += `- **Purchase Price**: ${formatMoney(selectedProductObj.purchasePrice, currency, exchangeRate)} | **Retail Price**: ${formatMoney(selectedProductObj.retailPrice, currency, exchangeRate)} (**${margin}% Margin**).\n`;
-      output += `- **Wholesale Tier Price**: ${formatMoney(selectedProductObj.wholesalePrice, currency, exchangeRate)}.\n\n`;
-
-      output += `#### 💡 Product Specific Optimization Advice:\n`;
-      if (Number(margin) < 15) {
-        output += `1. **Pricing Adjustment**: Current retail margin of **${margin}%** is below healthy 20% thresholds. Consider increasing retail price to **${formatMoney(selectedProductObj.purchasePrice * 1.25, currency, exchangeRate)}** to safeguard profit.\n`;
+      if (isSwahili) {
+        output += `#### 📦 Mfumo wa Bidhaa Specific: **${selectedProductObj.name}** (Nambari: ${selectedProductObj.code})\n`;
+        output += `- **Jumla ya Akiba Iliyopo**: **${totalUnits} ${selectedProductObj.unit}s** katika maduka ya kampuni.\n`;
+        output += `- **Bei ya Kununulia**: ${formatMoney(selectedProductObj.purchasePrice, currency, exchangeRate)} | **Bei ya Reja Reja**: ${formatMoney(selectedProductObj.retailPrice, currency, exchangeRate)} (**Faida ya ${margin}%**).\n`;
+        output += `- **Bei ya Jumla**: ${formatMoney(selectedProductObj.wholesalePrice, currency, exchangeRate)}.\n\n`;
       } else {
-        output += `1. **Healthy Margins**: Retail margin is strong at **${margin}%**. Maintain competitive wholesale pricing to capture high-volume business customers.\n`;
+        output += `#### 📦 Dedicated Focus: **${selectedProductObj.name}** (Code: ${selectedProductObj.code})\n`;
+        output += `- **Current Total Stock**: **${totalUnits} ${selectedProductObj.unit}s** across company stores.\n`;
+        output += `- **Purchase Price**: ${formatMoney(selectedProductObj.purchasePrice, currency, exchangeRate)} | **Retail Price**: ${formatMoney(selectedProductObj.retailPrice, currency, exchangeRate)} (**${margin}% Margin**).\n`;
+        output += `- **Wholesale Tier Price**: ${formatMoney(selectedProductObj.wholesalePrice, currency, exchangeRate)}.\n\n`;
       }
-
-      if (totalUnits <= selectedProductObj.lowStockQty) {
-        output += `2. **Urgent Reorder Signal**: Stock level (${totalUnits}) is at or below the safety threshold (${selectedProductObj.lowStockQty}). Reorder immediately from suppliers to avoid stockouts and customer dissatisfaction.\n`;
-      } else {
-        output += `2. **Inventory Turnover**: Stock levels are sufficient. Promote product bundling with fast-moving complementary goods.\n`;
-      }
-      output += `3. **Customer Satisfaction Tip**: Offer sub-unit/loose sales if customers request smaller purchase volumes.\n\n`;
     }
 
-    output += `#### 📊 Overall Company Health & Strategic Performance:\n`;
-    output += `- **Active Company Sales Volume**: **${companySales.length} orders** generating **${formatMoney(metrics.totalSalesRevenue, currency, exchangeRate)}** in total revenue.\n`;
-    output += `- **Gross Profit Realized**: **${formatMoney(metrics.totalSalesProfit, currency, exchangeRate)}** (**${metrics.grossMarginPct.toFixed(1)}% Gross Margin**).\n`;
-    output += `- **Operating Expenses**: **${formatMoney(metrics.totalExpenseAmount, currency, exchangeRate)}** | **Net Operating Profit**: **${formatMoney(metrics.netOperatingProfit, currency, exchangeRate)}**.\n`;
-    output += `- **Inventory Valuation**: **${formatMoney(metrics.stockValuationCost, currency, exchangeRate)}** (At Cost) / **${formatMoney(metrics.stockValuationRetail, currency, exchangeRate)}** (Potential Retail Value).\n\n`;
+    if (isSwahili) {
+      output += `#### 📊 Utendaji wa Jumla na Afya ya Kampuni:\n`;
+      output += `- **Jumla ya Mauzo ya Kampuni**: **Maagizo ${companySales.length}** yenye mapato ya **${formatMoney(metrics.totalSalesRevenue, currency, exchangeRate)}**.\n`;
+      output += `- **Faida ya Jumla**: **${formatMoney(metrics.totalSalesProfit, currency, exchangeRate)}** (**Wastani wa Faida ${metrics.grossMarginPct.toFixed(1)}%**).\n`;
+      output += `- **Gharama za Uendeshaji**: **${formatMoney(metrics.totalExpenseAmount, currency, exchangeRate)}** | **Faida Halisi**: **${formatMoney(metrics.netOperatingProfit, currency, exchangeRate)}**.\n`;
+      output += `- **Thamani ya Akiba**: **${formatMoney(metrics.stockValuationCost, currency, exchangeRate)}** (Gharama) / **${formatMoney(metrics.stockValuationRetail, currency, exchangeRate)}** (Mauzo ya Reja Reja).\n\n`;
 
-    output += `#### 🎯 Recommended Action Steps to Increase Sales & Customer Satisfaction:\n`;
-    output += `1. **Implement Customer Loyalty & Tiered Discounts**: ${metrics.uniqueCustomersInSales} unique customers recorded. Introduce preferred customer pricing tiers to lock in repeat wholesale buyers and raise retention to over 90%.\n`;
-    output += `2. **Eliminate Low-Stock Bottlenecks**: Currently **${metrics.lowStockCount} products** are at low stock levels. Stockouts directly damage customer trust. Set up automatic reorder triggers when items reach 20% threshold.\n`;
-    output += `3. **Optimize Product Mix & Bundling**: Combine high-margin accessories or slower-moving inventory with staple items into value bundles to clear stock faster and boost average order value.\n`;
-    output += `4. **Speed & Checkout Service Efficiency**: Ensure store operators utilize POS sub-unit pricing features so retail customers get accurate single-item pricing instantly without delay.\n`;
+      output += `#### 🎯 Mbinu za Kuongeza Mauzo, Vipimo vya Bidhaa (Unga, Mikate) na Kuridhika kwa Wateja:\n`;
+      output += `1. **Uboreshaji wa Bei za Vipimo Vidogo (Loose Units & Sub-Units)**: Tumia mfumo wa bei ndogo ndogo kwa bidhaa za uzani (kama unga, mikate) ili kuwapata wateja wa reja reja wanaotaka vipimo vidogo bila kuchelewa.\n`;
+      output += `2. **Punguza Hatari ya Bidhaa Kuisha**: Kuna **bidhaa ${metrics.lowStockCount}** zenye akiba ndogo. Agiza mapema kutoka kwa wasambazaji ili kuepuka kupoteza wateja.\n`;
+      output += `3. **Mkakati wa Punguzo kwa Wateja wa Jumla**: Toa viwango maalum vya bei kwa wauzaji wa jumla ili kuongeza uaminifu na mauzo ya mfululizo.\n`;
+      output += `4. **Udhibiti wa Matumizi ya Kampuni**: Punguza matumizi yasiyo ya lazima ili kuongeza faida halisi ya kampuni.\n`;
+    } else {
+      output += `#### 📊 Overall Company Health & Strategic Performance:\n`;
+      output += `- **Active Company Sales Volume**: **${companySales.length} orders** generating **${formatMoney(metrics.totalSalesRevenue, currency, exchangeRate)}** in total revenue.\n`;
+      output += `- **Gross Profit Realized**: **${formatMoney(metrics.totalSalesProfit, currency, exchangeRate)}** (**${metrics.grossMarginPct.toFixed(1)}% Gross Margin**).\n`;
+      output += `- **Operating Expenses**: **${formatMoney(metrics.totalExpenseAmount, currency, exchangeRate)}** | **Net Operating Profit**: **${formatMoney(metrics.netOperatingProfit, currency, exchangeRate)}**.\n`;
+      output += `- **Inventory Valuation**: **${formatMoney(metrics.stockValuationCost, currency, exchangeRate)}** (At Cost) / **${formatMoney(metrics.stockValuationRetail, currency, exchangeRate)}** (Potential Retail Value).\n\n`;
+
+      output += `#### 🎯 Recommended Action Steps to Increase Sales & Customer Satisfaction:\n`;
+      output += `1. **Optimize Sub-Unit & Loose Unit Pricing (Bread, Flour, Weights)**: Leverage TradeCore's sub-unit pricing engine so retail customers purchasing single units or loose weights receive instant, accurate calculations.\n`;
+      output += `2. **Eliminate Low-Stock Bottlenecks**: Currently **${metrics.lowStockCount} products** are at low stock levels. Set up automatic reorder triggers when items reach safety thresholds.\n`;
+      output += `3. **Implement Tiered Wholesale Pricing**: Offer bulk discounts to high-volume commercial buyers to lock in repeat wholesale orders and improve retention.\n`;
+      output += `4. **Strict Expense Optimization**: Review monthly operational expenses to ensure healthy net margins across all company branches.\n`;
+    }
 
     setCopilotResponse(output);
   };

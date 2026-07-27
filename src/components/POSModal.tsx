@@ -7,6 +7,9 @@ import { handlePrintWithFallback } from '../utils/printHelper';
 import { toast } from '../utils/toast';
 import { cleanCategoryName } from '../utils/categoryHelper';
 import { calculateFIFOCost, getFIFOBatchBreakdown } from '../utils/fifo';
+import { connectBluetoothPrinter, isBluetoothPrinterConnected, sendEscPosBytes, buildReceiptEscPosBuffer } from '../utils/escposPrinter';
+import { enqueueOfflineSale, getOfflineSalesQueue, syncOfflineSalesQueue } from '../utils/offlineSync';
+import { SmartMessagingModal } from './SmartMessagingModal';
 
 interface POSModalProps {
   isOpen: boolean;
@@ -580,6 +583,18 @@ export default function POSModal({
     const newTotal = totals.total;
     return (currentBalance + newTotal) > (selectedCustomer.creditLimit || 0);
   }, [selectedCustomer, priceType, totals.total]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleCheckout();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, cart, activeShift, allowNegativeStock, stockItems, selectedStoreId, salesOrders, paymentMethod, paymentStatus, cashAmount, bankAmount, mobileAmount, totals, priceType, selectedCustomerId]);
 
   // Submit checkout order
   const handleCheckout = () => {
@@ -1250,7 +1265,35 @@ export default function POSModal({
           </div>
 
           {/* Actions */}
-          <div className="p-4 bg-gray-50 border-t flex gap-2 no-print">
+          <div className="p-4 bg-gray-50 border-t flex flex-wrap gap-2 no-print">
+            <button
+              onClick={async () => {
+                try {
+                  if (!isBluetoothPrinterConnected()) {
+                    await connectBluetoothPrinter();
+                  }
+                  const storeObj = stores.find(s => s.id === completedOrder.storeId) || { name: 'Store' };
+                  const custObj = customers.find(c => c.id === completedOrder.customerId) || { name: 'Walk-in' };
+                  const buffer = buildReceiptEscPosBuffer(completedOrder, storeObj, custObj, activeCurrency || '$');
+                  await sendEscPosBytes(buffer);
+                  toast.success('Receipt sent directly to Bluetooth ESC/POS printer!');
+                } catch (err: any) {
+                  toast.error(err.message || 'Bluetooth printer error. Falling back to browser print.');
+                  handlePrintWithFallback((title, desc) => {
+                    setConfirmModal({
+                      isOpen: true,
+                      title: t(title),
+                      description: t(desc),
+                      onConfirm: () => {}
+                    });
+                  });
+                }
+              }}
+              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm"
+            >
+              <Printer className="w-4 h-4" /> Direct Thermal ESC/POS
+            </button>
+
             <button
               onClick={() => {
                 handlePrintWithFallback((title, desc) => {
@@ -1264,7 +1307,7 @@ export default function POSModal({
               }}
               className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider flex items-center justify-center gap-1.5"
             >
-              <Printer className="w-4 h-4" /> {t('Print Receipt')}
+              <Printer className="w-4 h-4" /> {t('Browser Print')}
             </button>
             <button
               onClick={() => { setCompletedOrder(null); setCart([]); onClose(); }}

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Company, Branch, Store, Settings } from '../types';
 import { translate } from '../utils/format';
-import { Settings as SettingsIcon, Menu, Bell, Sun, Moon, Store as StoreIcon, Globe } from 'lucide-react';
+import { Settings as SettingsIcon, Menu, Bell, Sun, Moon, Store as StoreIcon, Globe, Printer } from 'lucide-react';
+import { isBluetoothPrinterConnected } from '../utils/escposPrinter';
 
 interface HeaderProps {
   currentPage: string;
@@ -53,20 +54,38 @@ export default function Header({
 
   const availableBranches = (isSuperAdmin 
     ? branches.filter(b => b.companyId === currentCompanyId)
-    : branches.filter(b => b.companyId === currentUser?.companyId) // Normal Admins can see branches within their allocated company
+    : branches.filter(b => b.companyId === (currentUser?.companyId || currentCompanyId))
   ).filter(b => !b.isDeleted);
 
-  let availableStores = stores.filter(s => s.branchId === currentBranchId && !s.isDeleted);
+  const [btConnected, setBtConnected] = useState<boolean>(false);
+
+  useEffect(() => {
+    const checkPrinter = () => setBtConnected(isBluetoothPrinterConnected());
+    checkPrinter();
+
+    const interval = setInterval(() => {
+      checkPrinter();
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, []);
+
+  let availableStores = stores.filter(s => {
+    if (currentBranchId) return s.branchId === currentBranchId && !s.isDeleted;
+    const branch = branches.find(b => b.id === s.branchId);
+    return branch && branch.companyId === (currentUser?.companyId || currentCompanyId) && !s.isDeleted;
+  });
 
   if (currentUser && currentUser.role !== 'Super Admin') {
-    // Restrict standard Admins/Operators to their assigned company's branches & stores
     const userCompanyBranchIds = branches
-      .filter(b => b.companyId === currentUser.companyId && !b.isDeleted)
+      .filter(b => b.companyId === (currentUser.companyId || currentCompanyId) && !b.isDeleted)
       .map(b => b.id);
     availableStores = availableStores.filter(s => userCompanyBranchIds.includes(s.branchId));
 
-    // Restrict operators only to their exact assigned store if it is set
-    if (currentUser.storeId) {
+    // Lock operators to assigned store ONLY if explicitly set and user is NOT Wholesaler or Admin
+    if (currentUser.storeId && currentUser.role !== 'Wholesaler' && currentUser.role !== 'Admin') {
       availableStores = availableStores.filter(s => s.id === currentUser.storeId);
     }
   }
@@ -107,14 +126,11 @@ export default function Header({
 
           {/* User Name & Settings Pill for Mobile */}
           <div className="flex items-center gap-1.5 text-xs bg-white/15 px-2 py-1 rounded-full font-semibold border border-white/15">
-            <button
-              type="button"
-              onClick={onOpenGame}
-              className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 font-black text-white text-[11px] flex items-center justify-center shadow-xs hover:scale-105 active:scale-95 transition cursor-pointer shrink-0 border border-white/30"
-              title={t('Click user letter to open Mind Refresh Game Break')}
+            <div
+              className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 font-black text-white text-[11px] flex items-center justify-center shadow-xs shrink-0 border border-white/30"
             >
               {userInitial}
-            </button>
+            </div>
             <span className="text-white font-bold truncate max-w-[80px]">{currentUser?.username || currentUser?.name || 'User'}</span>
             {isAdmin && (
               <button
@@ -147,7 +163,7 @@ export default function Header({
           )}
 
           {/* Branch Context Select */}
-          {isAdmin && (
+          {(isAdmin || currentUser?.role === 'Wholesaler') && (
             <select
               value={currentBranchId || ''}
               onChange={(e) => onContextChange('branch', Number(e.target.value))}
@@ -181,6 +197,14 @@ export default function Header({
 
         {/* Desktop-only action controls & user status badge */}
         <div className="hidden md:flex items-center gap-2.5 shrink-0">
+          {/* Bluetooth Thermal Printer Indicator */}
+          {btConnected && (
+            <div className="flex items-center gap-1 text-[11px] bg-blue-500/20 text-blue-200 border border-blue-400/30 px-2 py-1 rounded-full font-bold">
+              <Printer className="w-3.5 h-3.5 text-blue-300" />
+              <span>Printer Connected</span>
+            </div>
+          )}
+
           {/* Company-Independent Currency & Language Badge */}
           <button
             type="button"
@@ -206,14 +230,12 @@ export default function Header({
 
           {/* User Profile Badge with Avatar Letter, Name, Role & System Settings Icon beside User Name */}
           <div className="flex items-center gap-2 text-xs bg-white/10 px-2.5 py-1 rounded-full font-semibold border border-white/15">
-            <button
-              type="button"
-              onClick={onOpenGame}
-              className="w-7 h-7 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 font-black text-white text-xs flex items-center justify-center shadow-xs hover:scale-110 active:scale-95 transition cursor-pointer shrink-0 border border-white/30"
-              title={t('Click user letter avatar to open Mind Refresh Arcade Game')}
+            <div
+              className="w-7 h-7 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 font-black text-white text-xs flex items-center justify-center shrink-0 border border-white/30 select-none"
+              title={currentUser?.username || currentUser?.name || 'User'}
             >
               {userInitial}
-            </button>
+            </div>
             <div className="flex flex-col text-left">
               <span className="text-white font-bold leading-tight">{currentUser?.username || currentUser?.name || 'User'}</span>
               <span className="text-gray-200 text-[10px] leading-tight font-medium">{currentUser ? t(currentUser.role) : 'Offline'}</span>

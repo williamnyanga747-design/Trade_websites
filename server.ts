@@ -171,41 +171,41 @@ Generate a JSON response conforming to the schema. Include a descriptive 'explan
   }
 });
 
-// Comprehensive AI Stock, Pricing, Sales & Customer Satisfaction Copilot Endpoint
+// Comprehensive AI Stock, Pricing, Sales & Company Growth Copilot Endpoint
 app.post("/api/copilot-analysis", async (req, res) => {
   try {
-    const { prompt, topic, companyInfo, metricsSummary, products, sales, purchases, expenses } = req.body;
+    const { prompt, topic, companyInfo, metricsSummary, products, sales, purchases, expenses, language } = req.body;
 
     let aiResponse = "";
     try {
       const ai = getGeminiClient();
-      const systemInstruction = `You are the Lead Executive AI Stock, Pricing & Growth Copilot for the Global TradeCore ERP system.
-Your mission is to provide deeply analytical, data-grounded, and actionable commercial advice for the specified company.
-You analyze products, sales history, purchase orders, gross profits, cost structures, and operational performance.
-Always focus specifically on the active company context (${companyInfo?.name || 'Active Company'}).
+      const targetLang = language === 'sw' ? 'Swahili (Kiswahili)' : 'English';
 
-Key Focus Areas:
-1. Stock & Inventory Health: Identify slow-moving items, deadstock risk, stockout risks, sub-unit velocity.
-2. Dynamic Pricing & Margins: Recommend price tweaks, margin optimizations, wholesale vs retail elasticity.
-3. Sales & Customer Satisfaction Growth: Provide high-impact strategies to increase daily sales, customer retention, loyalty, average order value, and CSAT score.
-4. Purchase & Supplier Efficiency: Recommend procurement timing, bulk discount negotiations, inventory turnover optimization.
-5. Profitability & Cost Control: Highlight margin leaks, expense ratios, cash flow velocity.
+      const systemInstruction = `You are the Lead Executive AI Enterprise Copilot for the specified company (${companyInfo?.name || 'Active Company'}).
+Your role is to discuss, analyze, and advise on ALL commercial, financial, operational, stock, pricing, and strategic matters facing this specific company.
 
-Formatting Rules:
-- Present clear bullet points with concise, structured headings.
-- Use bold numbers and monetary amounts where relevant.
-- Keep recommendations practical, professional, and actionable.`;
+Topics to cover as requested or relevant:
+1. Sales Velocity & Growth: Revenue trends, high-volume products, loose/sub-unit sales (e.g. bread, flour, weight measurements), retail vs wholesale customer adoption.
+2. Stock & Pricing Strategy: Sub-unit pricing rules, profit margins, stockout risks, safety thresholds, inventory valuation.
+3. Financial Health & Expenses: Expense optimization, gross margins, cash flow management, purchase order commitments.
+4. Operational & Supplier Management: Supplier reliability, order fulfillment, store performance across branches.
+5. Strategic Expansion & Customer Retention: Customer satisfaction strategies, loyalty programs, competitive pricing.
+
+CRITICAL LANGUAGE REQUIREMENT: You MUST respond entirely in ${targetLang}. If Swahili is selected, construct naturally fluent, professional Swahili text for business leadership.
+
+Formatting: Use bold headers, numbered actionable steps, and clear bullet points. Keep recommendations grounded in the provided company metrics.`;
 
       const userMsg = `Company Context: ${JSON.stringify(companyInfo)}
+Requested Language: ${targetLang}
+Topic Focus: ${topic || 'All Company Matters'}
+User Question/Command: "${prompt || 'Provide a complete strategic review covering all matters facing our company, including stock, pricing, sales, loose items, expenses, and growth.'}"
+
 Metrics Summary: ${JSON.stringify(metricsSummary)}
-Topic Selected: ${topic || 'General Performance'}
-User Question/Command: "${prompt || 'Provide a complete strategic review with advice to increase sales and customer satisfaction.'}"
+Top Products Sample: ${JSON.stringify((products || []).slice(0, 10))}
+Recent Sales Orders: ${JSON.stringify((sales || []).slice(0, 10))}
+Recent Purchase Orders: ${JSON.stringify((purchases || []).slice(0, 10))}
 
-Top Products Sample (up to 10): ${JSON.stringify((products || []).slice(0, 10))}
-Recent Sales Orders (up to 10): ${JSON.stringify((sales || []).slice(0, 10))}
-Recent Purchase Orders (up to 10): ${JSON.stringify((purchases || []).slice(0, 10))}
-
-Provide a comprehensive, high-value strategic report addressing the request with clear actionable steps to increase sales, optimize stock/pricing, and elevate customer satisfaction.`;
+Respond in ${targetLang} with a comprehensive executive report addressing all relevant matters for ${companyInfo?.name || 'the company'}.`;
 
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",

@@ -3,10 +3,12 @@ import {
   Company, Branch, Store, Customer, Supplier, Tax, StockItem, User
 } from '../types';
 import {
-  Plus, Pencil, Trash2, X, Store as StoreIcon, Database, RefreshCw
+  Plus, Pencil, Trash2, X, Store as StoreIcon, Database, RefreshCw, FileText, MessageSquare
 } from 'lucide-react';
 import { formatMoney } from '../utils/format';
 import { ConfirmActionModal } from './ConfirmActionModal';
+import { AccountStatementModal } from './AccountStatementModal';
+import { SmartMessagingModal } from './SmartMessagingModal';
 import { performCascadeDelete } from '../utils/cascadeDelete';
 import { toast } from '../utils/toast';
 import { getStoreCategories, getCompanyCategories, formatCompanyCategory, cleanCategoryName } from '../utils/categoryHelper';
@@ -68,6 +70,30 @@ export default function MasterData({
 }: MasterDataProps) {
   const [editingItem, setEditingItem] = useState<{ type: string; data: any } | null>(null);
   const [activeStoreDetailsId, setActiveStoreDetailsId] = useState<number | null>(null);
+
+  const [statementModal, setStatementModal] = useState<{
+    isOpen: boolean;
+    entityType: 'customer' | 'supplier';
+    entityId: number;
+    name: string;
+  }>({
+    isOpen: false,
+    entityType: 'customer',
+    entityId: 0,
+    name: ''
+  });
+
+  const [messagingModal, setMessagingModal] = useState<{
+    isOpen: boolean;
+    recipientName: string;
+    recipientPhone: string;
+    outstandingBalance: number;
+  }>({
+    isOpen: false,
+    recipientName: '',
+    recipientPhone: '',
+    outstandingBalance: 0
+  });
 
   const [localCompanyRates, setLocalCompanyRates] = useState<Record<number, string>>({});
   const [localUserRates, setLocalUserRates] = useState<Record<string, string>>({});
@@ -677,7 +703,11 @@ export default function MasterData({
                 {storeData.map(s => {
                   const branchName = branches.find(b => b.id === s.branchId)?.name || 'N/A';
                   const totalItems = stockItems.reduce((acc, p) => acc + (p.stock?.[s.id] || 0), 0);
-                  const stockValue = stockItems.reduce((acc, p) => acc + ((p.stock?.[s.id] || 0) * p.purchasePrice), 0);
+                  const stockValue = stockItems.reduce((acc, p) => {
+                    const rawQty = p.stock?.[s.id] || 0;
+                    const mainQty = p.useSubUnitPricing ? rawQty / (p.subUnitConversion || 1) : rawQty;
+                    return acc + (mainQty * p.purchasePrice);
+                  }, 0);
                   return (
                     <React.Fragment key={s.id}>
                       <tr className="hover:bg-gray-50/50">
@@ -752,8 +782,9 @@ export default function MasterData({
                                   {stockItems
                                     .filter(p => (p.stock?.[s.id] || 0) > 0)
                                     .map(p => {
-                                      const qty = p.stock[s.id] || 0;
-                                      const totalValue = qty * p.purchasePrice;
+                                      const qty = p.stock?.[s.id] || 0;
+                                      const mainQty = p.useSubUnitPricing ? qty / (p.subUnitConversion || 1) : qty;
+                                      const totalValue = mainQty * p.purchasePrice;
                                       return (
                                         <tr key={p.id} className="hover:bg-gray-50/50">
                                           <td className="p-2 font-bold text-gray-900">{p.name} <span className="text-[10px] font-mono text-gray-400">({p.code})</span></td>
@@ -842,7 +873,35 @@ export default function MasterData({
                       {fmt(c.balance || 0)}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-1.5">
+                      <div className="flex justify-end gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => setStatementModal({
+                            isOpen: true,
+                            entityType: 'customer',
+                            entityId: c.id,
+                            name: c.name
+                          })}
+                          className="p-1 px-2 text-[10px] font-bold rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition inline-flex items-center gap-1"
+                          title="Account Ledger Statement"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Ledger
+                        </button>
+                        {c.balance > 0 && (
+                          <button
+                            onClick={() => setMessagingModal({
+                              isOpen: true,
+                              recipientName: c.name,
+                              recipientPhone: c.phone || '',
+                              outstandingBalance: c.balance
+                            })}
+                            className="p-1 px-2 text-[10px] font-bold rounded border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition inline-flex items-center gap-1"
+                            title="Send WhatsApp Payment Reminder"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                            Reminder
+                          </button>
+                        )}
                         {(isAdmin || isSuperAdmin) && (
                           <>
                             <button
@@ -919,7 +978,20 @@ export default function MasterData({
                       {s.storeId ? stores.find(st => st.id === s.storeId)?.name || t('Unknown Store') : t('All Stores')}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-1.5">
+                      <div className="flex justify-end gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => setStatementModal({
+                            isOpen: true,
+                            entityType: 'supplier',
+                            entityId: s.id,
+                            name: s.name
+                          })}
+                          className="p-1 px-2 text-[10px] font-bold rounded border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition inline-flex items-center gap-1"
+                          title="Account Ledger Statement"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Ledger
+                        </button>
                         {(isAdmin || isSuperAdmin) && (
                           <>
                             <button
@@ -2261,6 +2333,28 @@ export default function MasterData({
       </div>
 
       {content}
+
+      <AccountStatementModal
+        isOpen={statementModal.isOpen}
+        onClose={() => setStatementModal(prev => ({ ...prev, isOpen: false }))}
+        entityType={statementModal.entityType}
+        entityId={statementModal.entityId}
+        entityName={statementModal.name}
+        salesOrders={salesOrders}
+        purchaseOrders={purchaseOrders}
+        customers={customers}
+        suppliers={suppliers}
+        currencySymbol={currency === 'TZS' ? 'TZS ' : '$'}
+      />
+
+      <SmartMessagingModal
+        isOpen={messagingModal.isOpen}
+        onClose={() => setMessagingModal(prev => ({ ...prev, isOpen: false }))}
+        recipientName={messagingModal.recipientName}
+        recipientPhone={messagingModal.recipientPhone}
+        outstandingBalance={messagingModal.outstandingBalance}
+        currencySymbol={currency === 'TZS' ? 'TZS ' : '$'}
+      />
 
       <ConfirmActionModal
         isOpen={confirmModal.isOpen}
