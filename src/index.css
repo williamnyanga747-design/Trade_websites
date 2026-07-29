@@ -107,13 +107,23 @@
     print-color-adjust: exact !important;
   }
 
-  /* Hide navigation, buttons, controls, and other unneeded UI widgets */
-  aside, header, .no-print, button, select, input, .print-hide, nav {
-    display: none !important;
+  /* 1. Hide everything in the document body by default */
+  body * {
+    visibility: hidden !important;
   }
 
-  /* Reset layout structure for proper printing flow */
-  html, body, #root, main {
+  /* 2. Make only designated printable targets and their descendants visible */
+  .print-container,
+  .print-container *,
+  .print-card,
+  .print-card *,
+  .printable-area,
+  .printable-area * {
+    visibility: visible !important;
+  }
+
+  /* 3. Reset document and body defaults */
+  html, body, #root {
     background: white !important;
     color: black !important;
     margin: 0 !important;
@@ -121,64 +131,57 @@
     width: 100% !important;
     height: auto !important;
     overflow: visible !important;
-    position: relative !important;
   }
 
-  /* Force all nested scroll/overflow container divs to expand fully and remain visible */
+  /* 4. Position printable elements absolutely at top of page so background content is excluded */
+  .print-container,
+  .print-card,
+  .printable-area {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    z-index: 999999 !important;
+  }
+
+  /* 80mm Slip Receipt styling */
+  .print-container {
+    width: 80mm !important;
+    max-width: 80mm !important;
+    padding: 3mm !important;
+    margin: 0 auto !important;
+    left: 0 !important;
+    right: 0 !important;
+    font-size: 10px !important;
+    line-height: 1.25 !important;
+  }
+
+  /* Full Page Report Card styling */
+  .print-card, .printable-area {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 10mm !important;
+  }
+
+  /* Expand scroll containers when printing */
   .overflow-x-auto, .overflow-y-auto, [class*="overflow-"], [class*="max-h-"] {
     overflow: visible !important;
     max-height: none !important;
     height: auto !important;
   }
 
-  /* Strip absolute/fixed centering on the backdrop container so child modal layouts can flow */
-  .fixed.inset-0 {
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: auto !important;
-    background: transparent !important;
-    backdrop-filter: none !important;
-    padding: 0 !important;
-    overflow: visible !important;
-    z-index: auto !important;
-    display: block !important;
+  /* Hide navigation, buttons, controls, and elements marked no-print */
+  aside, header, nav, .no-print, .no-print *, button, select, input, .print-hide {
+    display: none !important;
+    visibility: hidden !important;
   }
 
   @page {
-    size: 80mm auto;
+    size: auto;
     margin: 0;
-  }
-
-  /* Expand print card fully with elegant margins */
-  .print-card {
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    background: white !important;
-    overflow: visible !important;
-  }
-
-  /* Ensure thermal containers match exact slip printer width specifications */
-  .print-container {
-    width: 80mm !important;
-    max-width: 80mm !important;
-    padding: 3mm !important;
-    margin: 0 auto !important;
-    overflow: visible !important;
-    font-size: 10px !important;
-    line-height: 1.25 !important;
-  }
-
-  /* Prevent background bleeding when printing active modal elements */
-  body:has(.print-card) #root > div:not(:has(.print-card)) {
-    display: none !important;
-  }
-  body:has(.print-container) #root > div:not(:has(.print-container)) {
-    display: none !important;
   }
 }

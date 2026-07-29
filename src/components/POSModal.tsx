@@ -584,6 +584,28 @@ export default function POSModal({
     return (currentBalance + newTotal) > (selectedCustomer.creditLimit || 0);
   }, [selectedCustomer, priceType, totals.total]);
 
+  // Active shift sales metrics & statistics for empty cart panel and audit
+  const shiftOrders = useMemo(() => {
+    return salesOrders.filter(so => {
+      if (so.storeId !== selectedStoreId || so.status === 'Voided') return false;
+      if (activeShift && activeShift.startTime) {
+        return new Date(so.date) >= new Date(activeShift.startTime);
+      }
+      return true;
+    });
+  }, [salesOrders, selectedStoreId, activeShift]);
+
+  const shiftTotalRevenue = useMemo(() => {
+    return shiftOrders.reduce((sum, so) => sum + (so.total || 0), 0);
+  }, [shiftOrders]);
+
+  const shiftProductsSoldVolume = useMemo(() => {
+    return shiftOrders.reduce((sum, so) => {
+      const itemsCount = so.items?.reduce((iSum, item) => iSum + (item.qty || 0), 0) || 0;
+      return sum + itemsCount;
+    }, 0);
+  }, [shiftOrders]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1707,10 +1729,39 @@ export default function POSModal({
                 )}
               </div>
             </div>
+
+            {/* Mobile Floating Cart Quick Access Bar */}
+            <div className="md:hidden mt-auto pt-2 bg-white border-t border-gray-200 -mx-5 -mb-5 p-3 flex items-center justify-between shrink-0 shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="relative bg-brand p-2 rounded-xl text-white shrink-0">
+                  <ShoppingBag className="w-5 h-5" />
+                  {cart.length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] font-black w-4.5 h-4.5 rounded-full flex items-center justify-center border-2 border-white shadow-xs">
+                      {cart.reduce((s, i) => s + i.qty, 0)}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider block">
+                    {cart.length === 0 ? t('Cart Empty') : `${cart.length} ${t('Products')} (${cart.reduce((s, i) => s + i.qty, 0)} ${t('units')})`}
+                  </span>
+                  <span className="text-xs font-black text-gray-900 block">
+                    {formatMoney(totals.total, activeCurrency, activeExchangeRate)}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('cart')}
+                className="bg-brand hover:bg-brand-hover text-white text-xs font-black px-3.5 py-2 rounded-xl uppercase tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+              >
+                {t('View Cart')} &rarr;
+              </button>
+            </div>
           </div>
 
           {/* Right Panel: Shopping Cart Details & Invoice Summary */}
-          <div className={`w-full md:w-96 h-full max-h-full overflow-hidden flex flex-col p-4 md:p-5 bg-gray-50 flex-shrink-0 border-t md:border-t-0 ${activeTab !== 'cart' ? 'hidden md:flex' : 'flex'}`}>
+          <div className={`w-full md:w-96 flex-grow flex-1 flex flex-col p-4 md:p-5 bg-gray-50 flex-shrink-0 border-t md:border-t-0 border-gray-200 min-h-[320px] max-h-full overflow-hidden ${activeTab !== 'cart' ? 'flex md:flex' : 'flex'}`}>
             <div className="flex-shrink-0 space-y-3.5 mb-3">
               <div className="flex justify-between items-center">
                 <span className="font-bold text-gray-900 text-xs uppercase tracking-wider">{t('Cart Summary')}</span>
@@ -1809,7 +1860,7 @@ export default function POSModal({
             </div>
 
             {/* Middle Scrollable Section: Suspended Carts + Cart Items + Payment/Notes Options */}
-            <div className="flex-1 overflow-y-auto min-h-0 pr-1 scrollbar-thin space-y-3">
+            <div className={`flex-grow flex-1 overflow-y-auto min-h-[220px] max-h-[calc(100vh-280px)] md:max-h-full pr-1 scrollbar-thin space-y-3 flex flex-col ${cart.length === 0 ? 'flex-1 justify-center' : 'flex-1'}`}>
               {/* Suspended Carts Panel */}
               {suspendedCarts.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
@@ -1879,7 +1930,7 @@ export default function POSModal({
               )}
 
               {/* Cart Items List */}
-              <div className="space-y-2">
+              <div className={`space-y-2 flex-grow flex-col ${cart.length === 0 ? 'flex-1 flex justify-center' : 'flex-1 flex'} min-h-[180px]`}>
                 {cart.map(c => {
                   const product = stockItems.find(p => p.id === c.productId);
                   if (!product) return null;
@@ -1944,21 +1995,38 @@ export default function POSModal({
                 })}
 
                 {cart.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-5 px-4 text-center space-y-3 bg-white border border-dashed border-gray-300 rounded-2xl my-2 shadow-2xs">
-                    <ShoppingBag className="w-10 h-10 text-brand/50 animate-pulse" />
-                    <p className="text-xs font-black text-gray-800 uppercase tracking-wider">{t('Active Cart is Empty')}</p>
-                    <p className="text-[10px] text-gray-500 font-medium max-w-[240px] leading-relaxed">
-                      {t('Configure transaction parameters above, then tap catalog items to load products.')}
-                    </p>
-                    
-                    <div className="w-full pt-3 border-t border-gray-100 text-left text-[11px] space-y-1.5 text-gray-600">
+                  <div className="flex-grow flex-1 flex flex-col items-center justify-center min-h-[220px] max-h-[550px] overflow-y-auto py-4 px-3 text-center space-y-3 bg-white border border-dashed border-gray-300 rounded-2xl my-2 shadow-2xs">
+                    <div className="w-12 h-12 rounded-full bg-brand/10 flex items-center justify-center shrink-0">
+                      <ShoppingBag className="w-6 h-6 text-brand animate-pulse" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-black text-gray-900 uppercase tracking-wider">{t('Active Cart is Empty')}</p>
+                      <p className="text-[10px] text-gray-500 font-medium max-w-[240px] leading-relaxed mt-0.5">
+                        {t('Tap items in the catalog to add products. Essential store & shift details are shown below.')}
+                      </p>
+                    </div>
+
+                    {/* Shift & Store Real-time Performance Metrics */}
+                    <div className="w-full pt-2.5 border-t border-gray-100 text-left text-[11px] space-y-1.5 text-gray-600">
                       <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
                         <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Active Store')}</span>
                         <span className="font-extrabold text-gray-800 truncate max-w-[150px]">{stores.find(s => s.id === selectedStoreId)?.name || t('Not Assigned')}</span>
                       </div>
                       <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
-                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Operator')}</span>
-                        <span className="font-extrabold text-gray-800">{currentUser?.name || t('Guest')} ({t(currentUser?.role || '')})</span>
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Shift Operator')}</span>
+                        <span className="font-extrabold text-gray-800 truncate max-w-[150px]">{currentUser?.name || t('Guest')} ({t(currentUser?.role || '')})</span>
+                      </div>
+                      <div className="flex justify-between items-center bg-emerald-50/70 px-2.5 py-1.5 rounded-lg border border-emerald-200/60">
+                        <span className="font-extrabold text-emerald-800 uppercase tracking-wider text-[8px]">{t('Shift Sales Count')}</span>
+                        <span className="font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded text-[10px]">
+                          {shiftOrders.length} {t('sales')} ({shiftProductsSoldVolume} {t('items')})
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center bg-emerald-50/70 px-2.5 py-1.5 rounded-lg border border-emerald-200/60">
+                        <span className="font-extrabold text-emerald-800 uppercase tracking-wider text-[8px]">{t('Shift Total Revenue')}</span>
+                        <span className="font-black text-emerald-700 text-[11px]">
+                          {formatMoney(shiftTotalRevenue, activeCurrency, activeExchangeRate)}
+                        </span>
                       </div>
                       <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
                         <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Billing Mode')}</span>
@@ -1967,6 +2035,10 @@ export default function POSModal({
                       <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
                         <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Selected Client')}</span>
                         <span className="font-extrabold text-gray-800 truncate max-w-[150px]">{customers.find(c => c.id === selectedCustomerId)?.name || t('Guest')}</span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Store Catalog Items')}</span>
+                        <span className="font-black text-gray-700">{stockItems.length} {t('products registered')}</span>
                       </div>
                     </div>
                   </div>

@@ -147,9 +147,9 @@ Please confirm receipt and expected delivery date. Thank you!`;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
-      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-gray-100 flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-gray-100 flex flex-col max-h-[90vh] print-card">
         {/* Modal Header */}
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-4 flex items-center justify-between">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-4 flex items-center justify-between no-print">
           <div className="flex items-center gap-2 font-bold text-base">
             <MessageSquare className="w-5 h-5 text-emerald-200" />
             <span>

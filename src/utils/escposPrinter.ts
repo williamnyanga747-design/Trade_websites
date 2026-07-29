@@ -120,7 +120,17 @@ export async function connectBluetoothPrinter(): Promise<string> {
     return device.name || 'Bluetooth ESC/POS Printer';
   } catch (err: any) {
     console.error('Bluetooth Printer Error:', err);
-    throw new Error(err.message || 'Failed to connect Bluetooth printer.');
+    if (
+      err?.name === 'SecurityError' ||
+      err?.message?.includes('permissions policy') ||
+      err?.message?.includes('disallowed')
+    ) {
+      throw new Error('Bluetooth is disallowed in embedded preview frames. Please open this app in a new tab to use Bluetooth ESC/POS Thermal Printing.');
+    }
+    if (err?.name === 'NotFoundError' || err?.message?.includes('cancelled') || err?.message?.includes('canceled')) {
+      throw new Error('Bluetooth device selection was cancelled.');
+    }
+    throw new Error(err?.message || 'Failed to connect Bluetooth printer.');
   }
 }
 

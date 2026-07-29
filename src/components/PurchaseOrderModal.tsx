@@ -386,10 +386,39 @@ export default function PurchaseOrderModal({
                 </div>
               )}
             </div>
+
+            {/* Mobile Floating PO Summary Bar */}
+            <div className="md:hidden mt-auto pt-2 bg-white border-t border-gray-200 -mx-4 -mb-4 p-3 flex items-center justify-between shrink-0 shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="relative bg-brand p-2 rounded-xl text-white shrink-0">
+                  <FileText className="w-5 h-5" />
+                  {poItems.length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-white text-[9px] font-black w-4.5 h-4.5 rounded-full flex items-center justify-center border-2 border-white shadow-xs">
+                      {poItems.reduce((s, i) => s + i.qty, 0)}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider block">
+                    {poItems.length === 0 ? t('Draft Invoice Empty') : `${poItems.length} ${t('Items')} (${poItems.reduce((s, i) => s + i.qty, 0)} ${t('units')})`}
+                  </span>
+                  <span className="text-xs font-black text-gray-900 block">
+                    {formatMoney(grandTotal, activeCurrency, activeExchangeRate)}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('invoice')}
+                className="bg-brand hover:bg-brand-hover text-white text-xs font-black px-3.5 py-2 rounded-xl uppercase tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+              >
+                {t('Review Invoice')} &rarr;
+              </button>
+            </div>
           </div>
 
           {/* Right Panel: Purchase Invoice Items & Logging Details */}
-          <div className={`w-full md:w-2/5 bg-gray-50/50 p-4 overflow-y-auto flex flex-col justify-between border-t md:border-t-0 ${activeTab !== 'invoice' ? 'hidden md:flex' : 'flex'}`}>
+          <div className={`w-full md:w-2/5 bg-gray-50/50 p-4 overflow-y-auto flex-grow flex-1 flex flex-col justify-between min-h-[320px] border-t md:border-t-0 border-gray-200 ${activeTab !== 'invoice' ? 'flex md:flex' : 'flex'}`}>
             <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
               <span className="font-bold text-gray-800 text-xs tracking-wider uppercase block">{t('Invoice Layout')}</span>
 
@@ -459,7 +488,7 @@ export default function PurchaseOrderModal({
               </div>
 
               {/* PO Items List */}
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[150px]">
+              <div className={`flex-grow flex-1 overflow-y-auto space-y-2 pr-1 min-h-[200px] max-h-[calc(100vh-300px)] md:max-h-full scrollbar-thin ${poItems.length === 0 ? 'flex-1 flex flex-col justify-center' : 'flex-1'}`}>
                 {poItems.map(p => {
                   const product = stockItems.find(item => item.id === p.productId);
                   if (!product) return null;
@@ -579,9 +608,49 @@ export default function PurchaseOrderModal({
                 })}
 
                 {poItems.length === 0 && (
-                  <div className="h-full flex flex-col justify-center items-center text-gray-400 text-center font-bold text-xs space-y-2 py-8">
-                    <FileText className="w-8 h-8 text-gray-300" />
-                    <span>{t('No products added to invoice')}</span>
+                  <div className="flex-grow flex-1 flex flex-col items-center justify-center min-h-[220px] max-h-[550px] overflow-y-auto py-6 px-4 text-center space-y-3 bg-white border border-dashed border-gray-300 rounded-2xl my-2 shadow-2xs">
+                    <div className="w-12 h-12 rounded-full bg-brand/10 flex items-center justify-center shrink-0">
+                      <FileText className="w-6 h-6 text-brand animate-pulse" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-black text-gray-900 uppercase tracking-wider">{t('Draft Purchase Invoice is Empty')}</p>
+                      <p className="text-[10px] text-gray-500 font-medium max-w-[250px] leading-relaxed mt-0.5">
+                        {t('Tap catalog items to add products to this purchase order. Invoice metadata is summarized below.')}
+                      </p>
+                    </div>
+
+                    <div className="w-full pt-2.5 border-t border-gray-100 text-left text-[11px] space-y-1.5 text-gray-600">
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Destination Store')}</span>
+                        <span className="font-extrabold text-gray-800 truncate max-w-[150px]">
+                          {stores.find(s => s.id === selectedStoreId)?.name || t('Not Assigned')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Selected Supplier')}</span>
+                        <span className="font-extrabold text-gray-800 truncate max-w-[150px]">
+                          {suppliers.find(s => s.id === selectedSupplierId)?.name || t('Unassigned')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Payment Terms')}</span>
+                        <span className="font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 text-[10px]">
+                          {t(paymentTerms)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Stock Inbound')}</span>
+                        <span className={`font-extrabold px-1.5 py-0.5 rounded text-[10px] ${
+                          receiveImmediately ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-amber-100 text-amber-700 border border-amber-200'
+                        }`}>
+                          {receiveImmediately ? t('Immediate Receipt') : t('Pending Order')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center bg-gray-50 px-2.5 py-1.5 rounded-lg border border-gray-200/60">
+                        <span className="font-bold text-gray-400 uppercase tracking-wider text-[8px]">{t('Available Catalog Items')}</span>
+                        <span className="font-black text-gray-700">{stockItems.length} {t('products')}</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

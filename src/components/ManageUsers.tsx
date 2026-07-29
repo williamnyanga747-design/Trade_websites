@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Company, Branch, Store, AuditTrail } from '../types';
+import { User, Company, Branch, Store, AuditTrail, SecurityLog } from '../types';
 import {
   Plus, Pencil, Trash2, ShieldAlert, Copy, CheckCircle, X
 } from 'lucide-react';
@@ -13,6 +13,7 @@ interface ManageUsersProps {
   branches: Branch[];
   stores: Store[];
   auditTrails: AuditTrail[];
+  securityLogs?: SecurityLog[];
   rolePermissions: Record<string, string[]>;
   currentUser: User | null;
   currentCompanyId: number | null;

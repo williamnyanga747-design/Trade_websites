@@ -1,4 +1,4 @@
-import { Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings } from './types';
+import { Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, SecurityLog, Settings } from './types';
 
 const today = new Date().toISOString().split('T')[0];
 const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
@@ -118,3 +118,4 @@ export const defaultExpenses: Expense[] = [
 ];
 
 export const defaultAuditTrails: AuditTrail[] = [];
+export const defaultSecurityLogs: SecurityLog[] = [];

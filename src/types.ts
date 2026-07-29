@@ -40,6 +40,8 @@ export interface User {
   firstLogin: boolean;
   status: 'Active' | 'Blocked';
   allowedPages?: string[];
+  remoteTerminated?: boolean;
+  remoteTerminatedAt?: string;
 }
 
 export interface InventoryBatch {
@@ -197,6 +199,19 @@ export interface AuditTrail {
   timestamp: string;
 }
 
+export interface SecurityLog {
+  id: string;
+  username: string;
+  status: 'Success' | 'Failed' | 'Auto-Blocked' | 'Remote Terminated';
+  ipAddress: string;
+  browserFingerprint: string;
+  userAgent: string;
+  timestamp: string;
+  failureReason?: string;
+  deviceRecognized: boolean;
+  companyId?: number | null;
+}
+
 export type CurrencyType = 'USD' | 'TZS' | 'KES' | 'UGD' | 'UGX' | 'RWF' | 'EUR' | 'GBP';
 
 export type LanguageType = 'en' | 'sw' | 'fr' | 'es';
@@ -212,6 +227,7 @@ export interface Settings {
   userExchangeRates?: Record<string, number>;
   allowNegativeStock?: boolean;
   allowGamesEnabled?: boolean;
+  autoWeeklyBackupEnabled?: boolean;
 }
 
 export interface PosShift {

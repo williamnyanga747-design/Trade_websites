@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, Settings, PosShift, StockTransfer
+  Company, Branch, Store, User, StockItem, PurchaseOrder, SalesOrder, Expense, Tax, Supplier, Customer, AuditTrail, SecurityLog, Settings, PosShift, StockTransfer
 } from './types';
 import {
   defaultSettings, defaultRolePermissions, defaultCompanies, defaultBranches, defaultStores, defaultUsers,
   defaultCategories, defaultTaxes, defaultSuppliers, defaultCustomers, defaultStockItems, defaultPurchaseOrders,
-  defaultSalesOrders, defaultExpenses, defaultAuditTrails
+  defaultSalesOrders, defaultExpenses, defaultAuditTrails, defaultSecurityLogs
 } from './initialData';
 
 // Modular Components
@@ -31,7 +31,7 @@ import { handlePrintWithFallback } from './utils/printHelper';
 import { filterActiveData } from './utils/cascadeDelete';
 import { generateSalesOrderPDF } from './utils/pdfGenerator';
 import { getFIFOInventoryValuation, cleanupEmptyBatches } from './utils/fifo';
-import { saveSystemDataToCloud, fetchSystemDataFromCloud, subscribeToSystemDataCloud } from './utils/firebase';
+import { saveSystemDataToPhp, fetchSystemDataFromPhp, connectPhpRealtimeSync, getPhpConfig, savePhpConfig } from './utils/api';
 import { toast, Toast } from './utils/toast';
 import { getStoreCategories, cleanCategoryName } from './utils/categoryHelper';
 import {
@@ -42,9 +42,9 @@ import {
 import {
   LayoutDashboard, Package, ShoppingCart, Receipt, DollarSign, FileText, Database, FileUp,
   BarChart3, Users, UserCircle, LogOut, Settings as SettingsIcon, Search, Plus, ArrowLeftRight,
-  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, AlertTriangle, AlertCircle, X, XCircle, Check,
+  Pencil, Trash2, Printer, FileSpreadsheet, Copy, CheckCircle, CheckCircle2, ShoppingBag, RefreshCw, AlertTriangle, AlertCircle, X, XCircle, Check,
   ShieldAlert, DollarSign as DollarIcon, CreditCard, Monitor, Barcode, Store as StoreIcon,
-  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck, ChevronDown, ChevronUp, Building2, Camera, Layers
+  Calendar, TrendingUp, Info, ShieldCheck, Lock, Globe, Truck, ChevronDown, ChevronUp, Building2, Camera, Layers, Zap, RotateCcw
 } from 'lucide-react';
 
 // Helper function to darken/lighten hex colors dynamically
@@ -77,6 +77,7 @@ export default function App() {
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [auditTrails, setAuditTrails] = useState<AuditTrail[]>([]);
+  const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>(defaultRolePermissions);
   const [posShifts, setPosShifts] = useState<PosShift[]>([]);
@@ -118,7 +119,8 @@ export default function App() {
         return settings.companyCurrencies[targetCompId];
       }
     }
-    if (currentUser && settings.userCurrencies && settings.userCurrencies[currentUser.username]) {
+    // Only Super Admin/Admin can override currency; other roles follow company currency strictly
+    if (currentUser && (currentUser.role === 'Super Admin' || currentUser.role === 'Admin') && settings.userCurrencies && settings.userCurrencies[currentUser.username]) {
       return settings.userCurrencies[currentUser.username];
     }
     return settings.currency || 'USD';
@@ -201,9 +203,41 @@ export default function App() {
       return p;
     });
   }, [activeData.stockItems, currentCompanyId, currentUser, branches, stores, currentStoreId]);
-  const activePurchaseOrders = activeData.purchaseOrders;
-  const activeSalesOrders = activeData.salesOrders;
-  const activeExpenses = activeData.expenses;
+  const activeCompanyScopeId = currentCompanyId || currentUser?.companyId;
+
+  const activeBranchIdsScope = React.useMemo(() => {
+    if (!activeCompanyScopeId) return branches.map(b => b.id);
+    return branches.filter(b => b.companyId === activeCompanyScopeId && !b.isDeleted).map(b => b.id);
+  }, [branches, activeCompanyScopeId]);
+
+  const activeStoreIdsScope = React.useMemo(() => {
+    if (!activeCompanyScopeId) return stores.map(s => s.id);
+    return stores.filter(s => activeBranchIdsScope.includes(s.branchId) && !s.isDeleted).map(s => s.id);
+  }, [stores, activeBranchIdsScope, activeCompanyScopeId]);
+
+  const activePurchaseOrders = React.useMemo(() => {
+    let list = activeData.purchaseOrders.filter(po => !po.isDeleted);
+    if (activeCompanyScopeId) {
+      list = list.filter(po => activeStoreIdsScope.includes(po.storeId) || (po as any).companyId === activeCompanyScopeId);
+    }
+    return list;
+  }, [activeData.purchaseOrders, activeCompanyScopeId, activeStoreIdsScope]);
+
+  const activeSalesOrders = React.useMemo(() => {
+    let list = activeData.salesOrders.filter(so => !so.isDeleted && so.status !== 'Voided');
+    if (activeCompanyScopeId) {
+      list = list.filter(so => activeStoreIdsScope.includes(so.storeId) || (so as any).companyId === activeCompanyScopeId);
+    }
+    return list;
+  }, [activeData.salesOrders, activeCompanyScopeId, activeStoreIdsScope]);
+
+  const activeExpenses = React.useMemo(() => {
+    let list = activeData.expenses;
+    if (activeCompanyScopeId) {
+      list = list.filter(ex => activeStoreIdsScope.includes(ex.storeId) || (ex as any).companyId === activeCompanyScopeId);
+    }
+    return list;
+  }, [activeData.expenses, activeCompanyScopeId, activeStoreIdsScope]);
 
   // --- SYNC COOLDOWN REFS ---
   const lastLocalWriteTimeRef = React.useRef<number>(0);
@@ -551,6 +585,14 @@ export default function App() {
   // Master Modals
   const [showMasterModal, setShowMasterModal] = useState<{ type: string; obj: any } | null>(null);
 
+  // PHP Server Sync & Real-time State
+  const [isSyncingWithPhp, setIsSyncingWithPhp] = useState<boolean>(false);
+  const [phpSyncMessage, setPhpSyncMessage] = useState<string>('Synchronizing data with PHP server...');
+  const [showPhpConfigModal, setShowPhpConfigModal] = useState<boolean>(false);
+  const [phpApiUrlInput, setPhpApiUrlInput] = useState<string>(getPhpConfig().apiUrl);
+  const [phpWsUrlInput, setPhpWsUrlInput] = useState<string>(getPhpConfig().wsUrl);
+  const [phpApiKeyInput, setPhpApiKeyInput] = useState<string>(getPhpConfig().apiKey || '');
+
   // Apply parsed cloud/local database state to React state
   const applyData = (parsed: any) => {
     const loadedCompanies = (parsed.companies || defaultCompanies).map((c: any) => {
@@ -564,11 +606,19 @@ export default function App() {
       return c;
     });
 
+    let rawUsers = parsed.users || defaultUsers;
+    // Guarantee core default users (e.g., root_mandate) exist in the user state
+    defaultUsers.forEach(defU => {
+      if (!rawUsers.some((u: User) => u.username.toLowerCase() === defU.username.toLowerCase())) {
+        rawUsers = [...rawUsers, defU];
+      }
+    });
+
     const updatedState = {
       companies: loadedCompanies,
       branches: parsed.branches || defaultBranches,
       stores: parsed.stores || defaultStores,
-      users: parsed.users || defaultUsers,
+      users: rawUsers,
       categories: parsed.categories || defaultCategories,
       taxes: parsed.taxes || defaultTaxes,
       suppliers: parsed.suppliers || defaultSuppliers,
@@ -578,6 +628,7 @@ export default function App() {
       salesOrders: parsed.salesOrders || defaultSalesOrders,
       expenses: parsed.expenses || defaultExpenses,
       auditTrails: parsed.auditTrails || defaultAuditTrails,
+      securityLogs: parsed.securityLogs || defaultSecurityLogs,
       settings: parsed.settings || defaultSettings,
       rolePermissions: parsed.rolePermissions || defaultRolePermissions,
       posShifts: parsed.posShifts || [],
@@ -599,6 +650,7 @@ export default function App() {
     setSalesOrders(updatedState.salesOrders);
     setExpenses(updatedState.expenses);
     setAuditTrails(updatedState.auditTrails);
+    setSecurityLogs(updatedState.securityLogs);
     setSettings(updatedState.settings);
     setRolePermissions(updatedState.rolePermissions);
     setPosShifts(updatedState.posShifts);
@@ -668,84 +720,87 @@ export default function App() {
       }
     }
 
-    // 2. Keep devices in sync by subscribing to cloud changes in real-time
-    const unsubscribe = subscribeToSystemDataCloud((cloudData) => {
-      // Check if we wrote locally in the last 5 seconds to avoid overwriting optimistic state
-      if (Date.now() - lastLocalWriteTimeRef.current < 5000) {
-        console.log('[Sync] Skipping real-time update to protect recent optimistic local write');
-        return;
-      }
-      if (cloudData) {
-        // Avoid overwriting local updates if local cached data is newer or equal
-        const localCachedStr = localStorage.getItem('tradecore_data');
-        if (localCachedStr) {
-          try {
-            const localCached = JSON.parse(localCachedStr);
-            if (localCached.lastUpdated && cloudData.lastUpdated) {
-              const localTime = new Date(localCached.lastUpdated).getTime();
-              const cloudTime = new Date(cloudData.lastUpdated).getTime();
-              if (cloudTime <= localTime) {
-                // Already in sync or local is newer, avoid overriding
-                return;
+    // 2. Hydrate state from PHP backend on startup & subscribe to PHP real-time sync
+    const initPhpSync = async () => {
+      setIsSyncingWithPhp(true);
+      setPhpSyncMessage('Connecting to PHP database server...');
+      try {
+        const phpData = await fetchSystemDataFromPhp();
+        if (phpData) {
+          console.log('[PHP API] Loaded system state from PHP backend');
+          applyData(phpData);
+          localStorage.setItem('tradecore_data', JSON.stringify(phpData));
+
+          const sessionUserStr = localStorage.getItem('tradecore_user');
+          if (sessionUserStr && phpData.users) {
+            try {
+              const sessionUser = JSON.parse(sessionUserStr);
+              const freshUser = phpData.users.find((u: any) => u.id === sessionUser.id);
+              if (freshUser) {
+                localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
+                setCurrentUser(freshUser);
               }
+            } catch (e) {
+              console.error(e);
             }
-          } catch (e) {
-            console.error('Failed to compare local and cloud update times', e);
+          }
+        } else {
+          // If server is empty, seed with current local state
+          const localCached = localStorage.getItem('tradecore_data');
+          if (localCached) {
+            try {
+              const parsed = JSON.parse(localCached);
+              await saveSystemDataToPhp(parsed);
+            } catch (e) {}
+          } else {
+            const defaultState = {
+              companies: defaultCompanies,
+              branches: defaultBranches,
+              stores: defaultStores,
+              users: defaultUsers,
+              categories: defaultCategories,
+              taxes: defaultTaxes,
+              suppliers: defaultSuppliers,
+              customers: defaultCustomers,
+              stockItems: defaultStockItems,
+              purchaseOrders: defaultPurchaseOrders,
+              salesOrders: defaultSalesOrders,
+              expenses: defaultExpenses,
+              auditTrails: defaultAuditTrails,
+              settings: defaultSettings,
+              rolePermissions: defaultRolePermissions,
+              lastUpdated: new Date().toISOString()
+            };
+            localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
+            await saveSystemDataToPhp(defaultState);
           }
         }
+      } catch (err) {
+        console.warn('Initial PHP sync warning:', err);
+      } finally {
+        setIsSyncingWithPhp(false);
+      }
+    };
 
-        console.log('[Sync] Received real-time cloud update!');
-        // Apply cloud changes to state
-        applyData(cloudData);
-        // Persist to local cache
-        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
+    initPhpSync();
 
-        // Ensure logged-in user is updated in session if details changed
+    // Subscribe to real-time events / WebSockets from PHP backend
+    const unsubscribe = connectPhpRealtimeSync((phpData) => {
+      if (phpData) {
+        console.log('[PHP Realtime] Received live update from PHP server');
+        applyData(phpData);
+        localStorage.setItem('tradecore_data', JSON.stringify(phpData));
+
         const sessionUserStr = localStorage.getItem('tradecore_user');
-        if (sessionUserStr && cloudData.users) {
+        if (sessionUserStr && phpData.users) {
           try {
             const sessionUser = JSON.parse(sessionUserStr);
-            const freshUser = cloudData.users.find((u: any) => u.id === sessionUser.id);
+            const freshUser = phpData.users.find((u: any) => u.id === sessionUser.id);
             if (freshUser) {
               localStorage.setItem('tradecore_user', JSON.stringify(freshUser));
               setCurrentUser(freshUser);
             }
-          } catch (e) {
-            console.error(e);
-          }
-        }
-      } else {
-        // Cloud data is null - seed database
-        console.log('[Sync] Cloud database is empty. Seeding from local cache or defaults...');
-        const localCached = localStorage.getItem('tradecore_data');
-        if (localCached) {
-          try {
-            const parsed = JSON.parse(localCached);
-            saveSystemDataToCloud(parsed);
-          } catch (e) {
-            console.error('Failed to parse local cache for seeding', e);
-          }
-        } else {
-          const defaultState = {
-            companies: defaultCompanies,
-            branches: defaultBranches,
-            stores: defaultStores,
-            users: defaultUsers,
-            categories: defaultCategories,
-            taxes: defaultTaxes,
-            suppliers: defaultSuppliers,
-            customers: defaultCustomers,
-            stockItems: defaultStockItems,
-            purchaseOrders: defaultPurchaseOrders,
-            salesOrders: defaultSalesOrders,
-            expenses: defaultExpenses,
-            auditTrails: defaultAuditTrails,
-            settings: defaultSettings,
-            rolePermissions: defaultRolePermissions,
-            lastUpdated: new Date().toISOString()
-          };
-          localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
-          saveSystemDataToCloud(defaultState);
+          } catch (e) {}
         }
       }
     });
@@ -773,7 +828,7 @@ export default function App() {
     companies: Company[]; branches: Branch[]; stores: Store[]; users: User[];
     categories: string[]; taxes: Tax[]; suppliers: Supplier[]; customers: Customer[];
     stockItems: StockItem[]; purchaseOrders: PurchaseOrder[]; salesOrders: SalesOrder[];
-    expenses: Expense[]; auditTrails: AuditTrail[]; settings: Settings;
+    expenses: Expense[]; auditTrails: AuditTrail[]; securityLogs: SecurityLog[]; settings: Settings;
     rolePermissions: Record<string, string[]>;
     posShifts: PosShift[];
     stockTransfers: StockTransfer[];
@@ -811,6 +866,7 @@ export default function App() {
       salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : current.salesOrders,
       expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : current.expenses,
       auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : current.auditTrails,
+      securityLogs: updatedFields.securityLogs !== undefined ? updatedFields.securityLogs : current.securityLogs,
       settings: updatedFields.settings !== undefined ? updatedFields.settings : current.settings,
       rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : current.rolePermissions,
       posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : current.posShifts,
@@ -832,6 +888,7 @@ export default function App() {
     if (updatedFields.salesOrders !== undefined) setSalesOrders(updatedFields.salesOrders);
     if (updatedFields.expenses !== undefined) setExpenses(updatedFields.expenses);
     if (updatedFields.auditTrails !== undefined) setAuditTrails(updatedFields.auditTrails);
+    if (updatedFields.securityLogs !== undefined) setSecurityLogs(updatedFields.securityLogs);
     if (updatedFields.settings !== undefined) setSettings(updatedFields.settings);
     if (updatedFields.rolePermissions !== undefined) setRolePermissions(updatedFields.rolePermissions);
     if (updatedFields.posShifts !== undefined) setPosShifts(updatedFields.posShifts);
@@ -846,41 +903,40 @@ export default function App() {
     // 3. Write optimistic cache to localStorage instantly
     localStorage.setItem('tradecore_data', JSON.stringify(freshDataLocal));
 
-    // 4. Handle merge with cloud concurrently in the background (pull-merge-push)
+    // 4. Perform PHP API sync
+    setIsSyncingWithPhp(true);
+    setPhpSyncMessage('Saving changes to PHP server...');
     try {
-      const cloudData = await fetchSystemDataFromCloud();
+      const phpData = await fetchSystemDataFromPhp();
       let mergedData = { ...freshDataLocal };
 
-      if (cloudData) {
-        const cloudTime = new Date(cloudData.lastUpdated || 0).getTime();
+      if (phpData) {
+        const cloudTime = new Date(phpData.lastUpdated || 0).getTime();
         const isCloudNewer = cloudTime > prevLastUpdated;
-        
-        console.log(`[Sync] Cloud time: ${cloudTime}, Prev local time: ${prevLastUpdated}. Is cloud newer? ${isCloudNewer}`);
 
-        // If cloud is newer, pull fields we did NOT update in this tick.
         const latestDb = dbStateRef.current;
         mergedData = {
-          companies: updatedFields.companies !== undefined ? updatedFields.companies : (isCloudNewer ? (cloudData.companies || latestDb.companies) : latestDb.companies),
-          branches: updatedFields.branches !== undefined ? updatedFields.branches : (isCloudNewer ? (cloudData.branches || latestDb.branches) : latestDb.branches),
-          stores: updatedFields.stores !== undefined ? updatedFields.stores : (isCloudNewer ? (cloudData.stores || latestDb.stores) : latestDb.stores),
-          users: updatedFields.users !== undefined ? updatedFields.users : (isCloudNewer ? (cloudData.users || latestDb.users) : latestDb.users),
-          categories: updatedFields.categories !== undefined ? updatedFields.categories : (isCloudNewer ? (cloudData.categories || latestDb.categories) : latestDb.categories),
-          taxes: updatedFields.taxes !== undefined ? updatedFields.taxes : (isCloudNewer ? (cloudData.taxes || latestDb.taxes) : latestDb.taxes),
-          suppliers: updatedFields.suppliers !== undefined ? updatedFields.suppliers : (isCloudNewer ? (cloudData.suppliers || latestDb.suppliers) : latestDb.suppliers),
-          customers: updatedFields.customers !== undefined ? updatedFields.customers : (isCloudNewer ? (cloudData.customers || latestDb.customers) : latestDb.customers),
-          stockItems: updatedFields.stockItems !== undefined ? updatedFields.stockItems : (isCloudNewer ? (cloudData.stockItems || latestDb.stockItems) : latestDb.stockItems),
-          purchaseOrders: updatedFields.purchaseOrders !== undefined ? updatedFields.purchaseOrders : (isCloudNewer ? (cloudData.purchaseOrders || latestDb.purchaseOrders) : latestDb.purchaseOrders),
-          salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : (isCloudNewer ? (cloudData.salesOrders || latestDb.salesOrders) : latestDb.salesOrders),
-          expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : (isCloudNewer ? (cloudData.expenses || latestDb.expenses) : latestDb.expenses),
-          auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : (isCloudNewer ? (cloudData.auditTrails || latestDb.auditTrails) : latestDb.auditTrails),
-          settings: updatedFields.settings !== undefined ? updatedFields.settings : (isCloudNewer ? (cloudData.settings || latestDb.settings) : latestDb.settings),
-          rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : (isCloudNewer ? (cloudData.rolePermissions || latestDb.rolePermissions) : latestDb.rolePermissions),
-          posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : (isCloudNewer ? (cloudData.posShifts || latestDb.posShifts) : latestDb.posShifts),
-          stockTransfers: updatedFields.stockTransfers !== undefined ? updatedFields.stockTransfers : (isCloudNewer ? (cloudData.stockTransfers || latestDb.stockTransfers) : latestDb.stockTransfers),
+          companies: updatedFields.companies !== undefined ? updatedFields.companies : (isCloudNewer ? (phpData.companies || latestDb.companies) : latestDb.companies),
+          branches: updatedFields.branches !== undefined ? updatedFields.branches : (isCloudNewer ? (phpData.branches || latestDb.branches) : latestDb.branches),
+          stores: updatedFields.stores !== undefined ? updatedFields.stores : (isCloudNewer ? (phpData.stores || latestDb.stores) : latestDb.stores),
+          users: updatedFields.users !== undefined ? updatedFields.users : (isCloudNewer ? (phpData.users || latestDb.users) : latestDb.users),
+          categories: updatedFields.categories !== undefined ? updatedFields.categories : (isCloudNewer ? (phpData.categories || latestDb.categories) : latestDb.categories),
+          taxes: updatedFields.taxes !== undefined ? updatedFields.taxes : (isCloudNewer ? (phpData.taxes || latestDb.taxes) : latestDb.taxes),
+          suppliers: updatedFields.suppliers !== undefined ? updatedFields.suppliers : (isCloudNewer ? (phpData.suppliers || latestDb.suppliers) : latestDb.suppliers),
+          customers: updatedFields.customers !== undefined ? updatedFields.customers : (isCloudNewer ? (phpData.customers || latestDb.customers) : latestDb.customers),
+          stockItems: updatedFields.stockItems !== undefined ? updatedFields.stockItems : (isCloudNewer ? (phpData.stockItems || latestDb.stockItems) : latestDb.stockItems),
+          purchaseOrders: updatedFields.purchaseOrders !== undefined ? updatedFields.purchaseOrders : (isCloudNewer ? (phpData.purchaseOrders || latestDb.purchaseOrders) : latestDb.purchaseOrders),
+          salesOrders: updatedFields.salesOrders !== undefined ? updatedFields.salesOrders : (isCloudNewer ? (phpData.salesOrders || latestDb.salesOrders) : latestDb.salesOrders),
+          expenses: updatedFields.expenses !== undefined ? updatedFields.expenses : (isCloudNewer ? (phpData.expenses || latestDb.expenses) : latestDb.expenses),
+          auditTrails: updatedFields.auditTrails !== undefined ? updatedFields.auditTrails : (isCloudNewer ? (phpData.auditTrails || latestDb.auditTrails) : latestDb.auditTrails),
+          securityLogs: updatedFields.securityLogs !== undefined ? updatedFields.securityLogs : (isCloudNewer ? (phpData.securityLogs || latestDb.securityLogs) : latestDb.securityLogs),
+          settings: updatedFields.settings !== undefined ? updatedFields.settings : (isCloudNewer ? (phpData.settings || latestDb.settings) : latestDb.settings),
+          rolePermissions: updatedFields.rolePermissions !== undefined ? updatedFields.rolePermissions : (isCloudNewer ? (phpData.rolePermissions || latestDb.rolePermissions) : latestDb.rolePermissions),
+          posShifts: updatedFields.posShifts !== undefined ? updatedFields.posShifts : (isCloudNewer ? (phpData.posShifts || latestDb.posShifts) : latestDb.posShifts),
+          stockTransfers: updatedFields.stockTransfers !== undefined ? updatedFields.stockTransfers : (isCloudNewer ? (phpData.stockTransfers || latestDb.stockTransfers) : latestDb.stockTransfers),
           lastUpdated: new Date().toISOString()
         };
 
-        // Update React states if cloud was indeed newer and we merged any fields
         if (isCloudNewer) {
           dbStateRef.current = {
             companies: mergedData.companies,
@@ -902,36 +958,39 @@ export default function App() {
             stockTransfers: mergedData.stockTransfers,
           };
 
-          if (updatedFields.companies === undefined && cloudData.companies) setCompanies(cloudData.companies);
-          if (updatedFields.branches === undefined && cloudData.branches) setBranches(cloudData.branches);
-          if (updatedFields.stores === undefined && cloudData.stores) setStores(cloudData.stores);
-          if (updatedFields.users === undefined && cloudData.users) setUsers(cloudData.users);
-          if (updatedFields.categories === undefined && cloudData.categories) setCategories(cloudData.categories);
-          if (updatedFields.taxes === undefined && cloudData.taxes) setTaxes(cloudData.taxes);
-          if (updatedFields.suppliers === undefined && cloudData.suppliers) setSuppliers(cloudData.suppliers);
-          if (updatedFields.customers === undefined && cloudData.customers) setCustomers(cloudData.customers);
-          if (updatedFields.stockItems === undefined && cloudData.stockItems) setStockItems(cloudData.stockItems);
-          if (updatedFields.purchaseOrders === undefined && cloudData.purchaseOrders) setPurchaseOrders(cloudData.purchaseOrders);
-          if (updatedFields.salesOrders === undefined && cloudData.salesOrders) setSalesOrders(cloudData.salesOrders);
-          if (updatedFields.expenses === undefined && cloudData.expenses) setExpenses(cloudData.expenses);
-          if (updatedFields.auditTrails === undefined && cloudData.auditTrails) setAuditTrails(cloudData.auditTrails);
-          if (updatedFields.settings === undefined && cloudData.settings) setSettings(cloudData.settings);
-          if (updatedFields.rolePermissions === undefined && cloudData.rolePermissions) setRolePermissions(cloudData.rolePermissions);
-          if (updatedFields.posShifts === undefined && cloudData.posShifts) setPosShifts(cloudData.posShifts);
-          if (updatedFields.stockTransfers === undefined && cloudData.stockTransfers) setStockTransfers(cloudData.stockTransfers);
+          if (updatedFields.companies === undefined && phpData.companies) setCompanies(phpData.companies);
+          if (updatedFields.branches === undefined && phpData.branches) setBranches(phpData.branches);
+          if (updatedFields.stores === undefined && phpData.stores) setStores(phpData.stores);
+          if (updatedFields.users === undefined && phpData.users) setUsers(phpData.users);
+          if (updatedFields.categories === undefined && phpData.categories) setCategories(phpData.categories);
+          if (updatedFields.taxes === undefined && phpData.taxes) setTaxes(phpData.taxes);
+          if (updatedFields.suppliers === undefined && phpData.suppliers) setSuppliers(phpData.suppliers);
+          if (updatedFields.customers === undefined && phpData.customers) setCustomers(phpData.customers);
+          if (updatedFields.stockItems === undefined && phpData.stockItems) setStockItems(phpData.stockItems);
+          if (updatedFields.purchaseOrders === undefined && phpData.purchaseOrders) setPurchaseOrders(phpData.purchaseOrders);
+          if (updatedFields.salesOrders === undefined && phpData.salesOrders) setSalesOrders(phpData.salesOrders);
+          if (updatedFields.expenses === undefined && phpData.expenses) setExpenses(phpData.expenses);
+          if (updatedFields.auditTrails === undefined && phpData.auditTrails) setAuditTrails(phpData.auditTrails);
+          if (updatedFields.settings === undefined && phpData.settings) setSettings(phpData.settings);
+          if (updatedFields.rolePermissions === undefined && phpData.rolePermissions) setRolePermissions(phpData.rolePermissions);
+          if (updatedFields.posShifts === undefined && phpData.posShifts) setPosShifts(phpData.posShifts);
+          if (updatedFields.stockTransfers === undefined && phpData.stockTransfers) setStockTransfers(phpData.stockTransfers);
         }
       }
 
-      // Write final state to localStorage and cloud Firestore
       localStorage.setItem('tradecore_data', JSON.stringify(mergedData));
-      await saveSystemDataToCloud(mergedData);
+      await saveSystemDataToPhp(mergedData);
     } catch (err) {
-      console.warn('Background cloud merge failed, using local storage. Offline mode.', err);
-      await saveSystemDataToCloud(freshDataLocal);
+      console.warn('PHP API sync fallback to local storage:', err);
+      await saveSystemDataToPhp(freshDataLocal);
+    } finally {
+      setIsSyncingWithPhp(false);
     }
   };
 
-  const restoreFactoryDefaults = () => {
+  const restoreFactoryDefaults = async () => {
+    setIsSyncingWithPhp(true);
+    setPhpSyncMessage('Restoring factory defaults on PHP server...');
     const defaultState = {
       companies: defaultCompanies,
       branches: defaultBranches,
@@ -952,7 +1011,7 @@ export default function App() {
     };
 
     localStorage.setItem('tradecore_data', JSON.stringify(defaultState));
-    saveSystemDataToCloud(defaultState);
+    await saveSystemDataToPhp(defaultState);
 
     setCompanies(defaultCompanies);
     setBranches(defaultBranches);
@@ -969,6 +1028,7 @@ export default function App() {
     setAuditTrails(defaultAuditTrails);
     setSettings(defaultSettings);
     setRolePermissions(defaultRolePermissions);
+    setIsSyncingWithPhp(false);
   };
 
   const handleExportDatabase = () => {
@@ -2043,9 +2103,13 @@ export default function App() {
     // Cross reference user blocks and rules
     const liveUser = users.find(u => u.id === currentUser.id);
     if (liveUser) {
-      if (liveUser.status === 'Blocked') {
+      if (liveUser.status === 'Blocked' || liveUser.remoteTerminated) {
+        localStorage.removeItem('tradecore_user');
+        localStorage.removeItem('tradecore_data');
+        localStorage.removeItem('tradecore_weekly_auto_backup_json');
+        setCurrentUser(null);
         handleLogout();
-        toast.error(t('Your account access has been blocked by system administration.'));
+        toast.error(t('Your active session was terminated remotely by Administrator. Local storage revoked.'));
         return;
       }
       
@@ -2062,6 +2126,14 @@ export default function App() {
         localStorage.setItem('tradecore_user', JSON.stringify(nextUser));
         setCurrentUser(nextUser);
       }
+    } else {
+      // User was deleted/terminated from the database by Admin/Super Admin
+      localStorage.removeItem('tradecore_user');
+      localStorage.removeItem('tradecore_data');
+      setCurrentUser(null);
+      handleLogout();
+      toast.error(t('Your account has been terminated by system administration. Local storage revoked.'));
+      return;
     }
 
     if (currentUser.role === 'Super Admin') {
@@ -2128,6 +2200,39 @@ export default function App() {
     root.style.setProperty('--brand-color-light', activeColor + '26');
   }, [currentUser, currentCompanyId, companies]);
 
+  // --- 5-MINUTE INACTIVITY AUTO-LOCK / AUTO-LOGOUT FOR SHARED HARDWARE SECURITY ---
+  const lastActivityRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes inactivity timeout
+
+    const updateActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
+    // Global listener for hardware interaction
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
+    activityEvents.forEach(evt => window.addEventListener(evt, updateActivity, { passive: true }));
+
+    // Periodic activity check every 5 seconds
+    const intervalId = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= INACTIVITY_TIMEOUT_MS) {
+        logAction('Auto Security Lock', 'User session locked automatically due to 5 minutes of inactivity on shared POS hardware.');
+        localStorage.removeItem('tradecore_user');
+        setCurrentUser(null);
+        setCurrentPage('dashboard');
+        toast.warning(t('Auto-Locked: Session closed due to 5 minutes of inactivity to protect commerce ledger data.'));
+      }
+    }, 5000);
+
+    return () => {
+      activityEvents.forEach(evt => window.removeEventListener(evt, updateActivity));
+      clearInterval(intervalId);
+    };
+  }, [currentUser]);
+
   // Restrict accessible stores based on soft-deletion, active company selection, and user assignment permissions
   const visibleCompanies = useMemo(() => {
     let result = companies.filter(c => !c.isDeleted);
@@ -2179,45 +2284,189 @@ export default function App() {
     saveAllData({ auditTrails: [newLog, ...(dbStateRef.current?.auditTrails || auditTrails)] });
   };
 
+  // --- TELEMETRY & FINGERPRINTING HELPERS ---
+  const getBrowserFingerprint = (): string => {
+    try {
+      const ua = navigator.userAgent || '';
+      const screenRes = `${window.screen.width}x${window.screen.height}`;
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const lang = navigator.language || 'en';
+      let hash = 0;
+      const str = `${ua}|${screenRes}|${tz}|${lang}`;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0;
+      }
+      const deviceType = /Mobi|Android/i.test(ua) ? 'Mobile Device' : 'Desktop Station';
+      return `${deviceType} (${screenRes}, ${tz}) [FP-${Math.abs(hash).toString(16).toUpperCase()}]`;
+    } catch (e) {
+      return 'Web Browser [FP-UNKNOWN]';
+    }
+  };
+
+  const getClientIp = async (): Promise<string> => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 900);
+      const res = await fetch('https://api.ipify.org?format=json', { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.ip) return json.ip;
+      }
+    } catch (e) {}
+    return `Session IP (${window.location.hostname || '127.0.0.1'})`;
+  };
+
   // --- ACTIONS ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    let latestUsers = users;
-    // Perform an active pre-login sync to ensure we have the latest registered credentials from the cloud
+    let latestUsers = [...users];
+    // Perform an active pre-login sync to ensure we have the latest registered credentials from the PHP server
     try {
-      const cloudData = await fetchSystemDataFromCloud();
-      if (cloudData) {
-        applyData(cloudData);
-        localStorage.setItem('tradecore_data', JSON.stringify(cloudData));
-        if (cloudData.users) {
-          latestUsers = cloudData.users;
+      const phpData = await fetchSystemDataFromPhp();
+      if (phpData) {
+        applyData(phpData);
+        localStorage.setItem('tradecore_data', JSON.stringify(phpData));
+        if (phpData.users) {
+          latestUsers = phpData.users;
         }
       }
     } catch (err) {
-      console.warn('Pre-login cloud fetch failed, falling back to local credentials', err);
+      console.warn('Pre-login PHP fetch failed, falling back to local credentials', err);
     }
 
-    const found = latestUsers.find(u => 
-      u.username.trim().toLowerCase() === loginUsername.trim().toLowerCase() && 
-      u.password === loginPassword
-    );
-    if (found) {
-      if (found.status === 'Blocked') {
-        toast.error(t('Your access credentials have been blocked.'));
+    // Ensure default core accounts like root_mandate are always in latestUsers
+    defaultUsers.forEach(defU => {
+      if (!latestUsers.some(u => u.username.toLowerCase() === defU.username.toLowerCase())) {
+        latestUsers.push(defU);
+      }
+    });
+
+    const fingerprint = getBrowserFingerprint();
+    const ipAddress = await getClientIp();
+    const userAgent = navigator.userAgent || 'Web Browser';
+    const cleanUsername = loginUsername.trim().toLowerCase();
+
+    // Check if target user exists
+    const targetUser = latestUsers.find(u => u.username.trim().toLowerCase() === cleanUsername);
+
+    if (targetUser) {
+      // Check if blocked or remotely terminated
+      if (targetUser.status === 'Blocked' || targetUser.remoteTerminated) {
+        const blockedSecLog: SecurityLog = {
+          id: 'SECLOG-' + Date.now(),
+          username: targetUser.username,
+          status: 'Failed',
+          ipAddress,
+          browserFingerprint: fingerprint,
+          userAgent,
+          timestamp: new Date().toISOString(),
+          failureReason: 'Access attempt rejected: Account is currently Blocked / Remotely Terminated.',
+          deviceRecognized: false,
+          companyId: targetUser.companyId
+        };
+        saveAllData({ securityLogs: [blockedSecLog, ...securityLogs] });
+        toast.error(t('Your access credentials have been blocked or remotely revoked.'));
         return;
       }
-      
-      localStorage.setItem('tradecore_user', JSON.stringify(found));
-      setCurrentUser(found);
-      
-      if (found.firstLogin) {
-        setShowForcePasswordModal(true);
+
+      // Check password
+      if (targetUser.password === loginPassword) {
+        // Password Correct - Log Success
+        const successLog: SecurityLog = {
+          id: 'SECLOG-' + Date.now(),
+          username: targetUser.username,
+          status: 'Success',
+          ipAddress,
+          browserFingerprint: fingerprint,
+          userAgent,
+          timestamp: new Date().toISOString(),
+          deviceRecognized: true,
+          companyId: targetUser.companyId
+        };
+
+        saveAllData({ securityLogs: [successLog, ...securityLogs] });
+        localStorage.setItem('tradecore_user', JSON.stringify(targetUser));
+        setCurrentUser(targetUser);
+
+        if (targetUser.firstLogin) {
+          setForceNewPass('');
+          setForceConfirmPass('');
+          setShowForcePasswordModal(true);
+        } else {
+          setLoginUsername('');
+          setLoginPassword('');
+          setCurrentPage('dashboard');
+          logAction('User Login', `Session opened successfully from ${ipAddress}.`);
+        }
       } else {
-        setCurrentPage('dashboard');
-        logAction('User Login', `Session opened successfully.`);
+        // Password Incorrect -> Calculate recent failed attempts for this username
+        const recentFailedLogs = securityLogs.filter(
+          l => l.username.toLowerCase() === cleanUsername && l.status === 'Failed'
+        );
+        const failedCount = recentFailedLogs.length + 1;
+
+        if (failedCount >= 3) {
+          // Auto-block account after 3 failed login attempts from unrecognized device/IP
+          const updatedUsers = latestUsers.map(u => 
+            u.id === targetUser.id ? { ...u, status: 'Blocked' as const } : u
+          );
+
+          const autoBlockLog: SecurityLog = {
+            id: 'SECLOG-' + Date.now(),
+            username: targetUser.username,
+            status: 'Auto-Blocked',
+            ipAddress,
+            browserFingerprint: fingerprint,
+            userAgent,
+            timestamp: new Date().toISOString(),
+            failureReason: `Account auto-blocked after ${failedCount} consecutive failed login attempts from unrecognized device (${ipAddress}).`,
+            deviceRecognized: false,
+            companyId: targetUser.companyId
+          };
+
+          saveAllData({
+            users: updatedUsers,
+            securityLogs: [autoBlockLog, ...securityLogs]
+          });
+
+          toast.error(t('Account auto-blocked due to repeated failed logins from unrecognized device/IP for security.'));
+        } else {
+          // Failed attempt < 3
+          const failedLog: SecurityLog = {
+            id: 'SECLOG-' + Date.now(),
+            username: targetUser.username,
+            status: 'Failed',
+            ipAddress,
+            browserFingerprint: fingerprint,
+            userAgent,
+            timestamp: new Date().toISOString(),
+            failureReason: `Invalid password provided. Attempt ${failedCount}/3 before auto-block security trigger.`,
+            deviceRecognized: false,
+            companyId: targetUser.companyId
+          };
+
+          saveAllData({ securityLogs: [failedLog, ...securityLogs] });
+          toast.error(`${t('Invalid login credentials provided.')} (${t('Attempt')} ${failedCount}/3)`);
+        }
       }
     } else {
+      // Username not found
+      const unknownUserLog: SecurityLog = {
+        id: 'SECLOG-' + Date.now(),
+        username: loginUsername || 'unrecognized_user',
+        status: 'Failed',
+        ipAddress,
+        browserFingerprint: fingerprint,
+        userAgent,
+        timestamp: new Date().toISOString(),
+        failureReason: 'User account not found in system database.',
+        deviceRecognized: false
+      };
+
+      saveAllData({ securityLogs: [unknownUserLog, ...securityLogs] });
       toast.error(t('Invalid login credentials provided.'));
     }
   };
@@ -2252,6 +2501,10 @@ export default function App() {
     const nextUser = { ...currentUser!, password: forceNewPass, firstLogin: false };
     localStorage.setItem('tradecore_user', JSON.stringify(nextUser));
     setCurrentUser(nextUser);
+    setForceNewPass('');
+    setForceConfirmPass('');
+    setLoginUsername('');
+    setLoginPassword('');
     setShowForcePasswordModal(false);
     setCurrentPage('dashboard');
     logAction('Forced Password Change', 'Updated default password on first sign-in.');
@@ -3806,35 +4059,82 @@ export default function App() {
 
   // 3. Purchase Order Component Log view
   const renderPurchaseOrders = () => {
+    const storeFilteredPOs = activePurchaseOrders.filter(po => currentStoreId ? po.storeId === currentStoreId : true);
+    const totalPOVal = storeFilteredPOs.reduce((acc, po) => acc + (po.total || 0), 0);
+    const pendingCount = storeFilteredPOs.filter(po => po.status === 'Pending').length;
+    const receivedCount = storeFilteredPOs.filter(po => po.status === 'Received').length;
+
     return (
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b flex items-center justify-between">
-          <span className="font-bold text-gray-900 text-sm">Purchase Order Journals</span>
-          <button
-            onClick={() => setShowPOModal(true)}
-            className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition"
-          >
-            <Plus className="w-4 h-4" /> Create PO
-          </button>
+      <div className="space-y-4">
+        {/* KPI Summary Header Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Total Purchase Orders')}</p>
+              <p className="text-lg font-black text-slate-900 mt-0.5">{storeFilteredPOs.length}</p>
+            </div>
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+              <ShoppingBag className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Pending Receiving')}</p>
+              <p className="text-lg font-black text-amber-600 mt-0.5">{pendingCount}</p>
+            </div>
+            <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
+              <RefreshCw className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Received Orders')}</p>
+              <p className="text-lg font-black text-emerald-600 mt-0.5">{receivedCount}</p>
+            </div>
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Total PO Value')}</p>
+              <p className="text-lg font-black text-brand mt-0.5">{formatMoney(totalPOVal, activeCurrency, activeExchangeRate)}</p>
+            </div>
+            <div className="p-2 bg-brand/10 text-brand rounded-lg">
+              <DollarSign className="w-5 h-5" />
+            </div>
+          </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-gray-50 border-b text-gray-500 uppercase font-bold text-[10px]">
-              <tr>
-                <th className="p-3">PO Number</th>
-                <th className="p-3">Store Name</th>
-                <th className="p-3">Supplier</th>
-                <th className="p-3">Date</th>
-                <th className="p-3">Product Name</th>
-                <th className="p-3 text-right">Grand Total</th>
-                <th className="p-3">Status</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 font-semibold">
-              {activePurchaseOrders
-                .filter(po => currentStoreId ? po.storeId === currentStoreId : true)
-                .map(po => (
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b flex items-center justify-between">
+            <span className="font-bold text-gray-900 text-sm">{t('Purchase Order Journals')}</span>
+            <button
+              onClick={() => setShowPOModal(true)}
+              className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> {t('Create PO')}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-gray-50 border-b text-gray-500 uppercase font-bold text-[10px]">
+                <tr>
+                  <th className="p-3">{t('PO Number')}</th>
+                  <th className="p-3">{t('Store Name')}</th>
+                  <th className="p-3">{t('Supplier')}</th>
+                  <th className="p-3">{t('Date')}</th>
+                  <th className="p-3">{t('Product Name')}</th>
+                  <th className="p-3 text-right">{t('Grand Total')}</th>
+                  <th className="p-3">{t('Status')}</th>
+                  <th className="p-3 text-right">{t('Actions')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-semibold">
+                {storeFilteredPOs.map(po => (
                   <tr key={po.id} className="hover:bg-gray-50/50">
                     <td className="p-3 font-bold text-brand font-mono">{po.poNumber}</td>
                     <td className="p-3 text-gray-900 font-bold">{getStoreName(po.storeId)}</td>
@@ -3881,7 +4181,7 @@ export default function App() {
                             }}
                             className="text-xs bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-3 py-1 rounded-md transition"
                           >
-                            Receive
+                            {t('Receive')}
                           </button>
                         )}
                         {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
@@ -3889,12 +4189,13 @@ export default function App() {
                             onClick={() => {
                               setConfirmModal({
                                 isOpen: true,
-                                title: 'Delete Purchase Order',
-                                description: `Are you sure you want to completely delete purchase order ${po.poNumber}? This action is irreversible.`,
+                                title: t('Delete Purchase Order'),
+                                description: `Are you sure you want to delete purchase order ${po.poNumber}? It will be moved to the Data Recovery Hub.`,
                                 onConfirm: () => {
-                                  const remaining = purchaseOrders.filter(item => item.id !== po.id);
-                                  saveAllData({ purchaseOrders: remaining });
-                                  logAction('Deleted PO', `Deleted purchase order: ${po.poNumber}`);
+                                  const updatedPOs = purchaseOrders.map(item => item.id === po.id ? { ...item, isDeleted: true } : item);
+                                  saveAllData({ purchaseOrders: updatedPOs });
+                                  logAction('Deleted PO', `Moved purchase order to Data Recovery Hub: ${po.poNumber}`);
+                                  toast.success(t('Purchase order moved to Data Recovery Hub.'));
                                 }
                               });
                             }}
@@ -3902,15 +4203,31 @@ export default function App() {
                             title="Delete PO"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            Delete
+                            {t('Delete')}
                           </button>
                         )}
                       </div>
                     </td>
                   </tr>
                 ))}
-            </tbody>
-          </table>
+                {storeFilteredPOs.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="p-12 text-center text-gray-400">
+                      <ShoppingBag className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                      <p className="text-sm font-bold text-gray-600 mb-1">{t('No purchase orders recorded yet.')}</p>
+                      <p className="text-xs text-gray-400 mb-4">{t('Create purchase orders to restock products from your suppliers.')}</p>
+                      <button
+                        onClick={() => setShowPOModal(true)}
+                        className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition"
+                      >
+                        <Plus className="w-4 h-4" /> {t('Create First Purchase Order')}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -3918,35 +4235,82 @@ export default function App() {
 
   // 4. Sales Orders Log view
   const renderSalesOrders = () => {
+    const storeFilteredSOs = activeSalesOrders.filter(so => currentStoreId ? so.storeId === currentStoreId : true);
+    const totalRev = storeFilteredSOs.reduce((acc, so) => acc + (so.total || 0), 0);
+    const totalProfit = storeFilteredSOs.reduce((acc, so) => acc + (so.profit || 0), 0);
+    const avgOrder = storeFilteredSOs.length > 0 ? totalRev / storeFilteredSOs.length : 0;
+
     return (
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b flex items-center justify-between">
-          <span className="font-bold text-gray-900 text-sm">Completed Sales Ledgers</span>
-          <button
-            onClick={() => setShowSOModal(true)}
-            className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition"
-          >
-            <Monitor className="w-4 h-4" /> POS Terminal
-          </button>
+      <div className="space-y-4">
+        {/* KPI Summary Header Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Total Sales Volume')}</p>
+              <p className="text-lg font-black text-slate-900 mt-0.5">{storeFilteredSOs.length}</p>
+            </div>
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Total Revenue')}</p>
+              <p className="text-lg font-black text-brand mt-0.5">{formatMoney(totalRev, activeCurrency, activeExchangeRate)}</p>
+            </div>
+            <div className="p-2 bg-brand/10 text-brand rounded-lg">
+              <DollarSign className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Total Gross Profit')}</p>
+              <p className="text-lg font-black text-emerald-600 mt-0.5">{formatMoney(totalProfit, activeCurrency, activeExchangeRate)}</p>
+            </div>
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{t('Average Order Value')}</p>
+              <p className="text-lg font-black text-purple-600 mt-0.5">{formatMoney(avgOrder, activeCurrency, activeExchangeRate)}</p>
+            </div>
+            <div className="p-2 bg-purple-50 text-purple-600 rounded-lg">
+              <Monitor className="w-5 h-5" />
+            </div>
+          </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-gray-50 border-b text-gray-500 uppercase font-bold text-[10px]">
-              <tr>
-                <th className="p-3">Sales Document #</th>
-                <th className="p-3">Customer Client</th>
-                <th className="p-3">Date</th>
-                <th className="p-3">Billing Tier</th>
-                <th className="p-3">Checkout Items</th>
-                <th className="p-3 text-right">Gross Total</th>
-                <th className="p-3 text-right text-emerald-700">Profit Margin</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 font-semibold">
-              {activeSalesOrders
-                .filter(so => currentStoreId ? so.storeId === currentStoreId : true)
-                .map(so => (
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b flex items-center justify-between">
+            <span className="font-bold text-gray-900 text-sm">{t('Completed Sales Ledgers')}</span>
+            <button
+              onClick={() => setShowSOModal(true)}
+              className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+            >
+              <Monitor className="w-4 h-4" /> {t('POS Terminal')}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-gray-50 border-b text-gray-500 uppercase font-bold text-[10px]">
+                <tr>
+                  <th className="p-3">{t('Sales Document #')}</th>
+                  <th className="p-3">{t('Customer Client')}</th>
+                  <th className="p-3">{t('Date')}</th>
+                  <th className="p-3">{t('Billing Tier')}</th>
+                  <th className="p-3">{t('Checkout Items')}</th>
+                  <th className="p-3 text-right">{t('Gross Total')}</th>
+                  <th className="p-3 text-right text-emerald-700">{t('Profit Margin')}</th>
+                  <th className="p-3 text-right">{t('Actions')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 font-semibold">
+                {storeFilteredSOs.map(so => (
                   <tr key={so.id} className="hover:bg-gray-50/50">
                     <td className="p-3 font-bold text-brand font-mono">{so.soNumber}</td>
                     <td className="p-3 text-gray-900">{getCustomerName(so.customerId)}</td>
@@ -3996,35 +4360,52 @@ export default function App() {
                           title="Download professional PDF Invoice"
                         >
                           <FileText className="w-3.5 h-3.5" />
-                          View Details
+                          {t('View Details')}
                         </button>
                         {(currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin') && (
                           <button
                             onClick={() => {
                               setConfirmModal({
                                 isOpen: true,
-                                title: 'Delete Sales Ledger',
-                                description: `Are you sure you want to completely delete sales ledger ${so.soNumber}? This action is irreversible.`,
+                                title: t('Void Sales Invoice'),
+                                description: `Are you sure you want to void sales ledger ${so.soNumber}? It will be moved to the Data Recovery Hub audit trail.`,
                                 onConfirm: () => {
-                                  const remaining = salesOrders.filter(item => item.id !== so.id);
-                                  saveAllData({ salesOrders: remaining });
-                                  logAction('Deleted Sales Ledger', `Deleted sales ledger: ${so.soNumber}`);
+                                  const updatedSOs = salesOrders.map(item => item.id === so.id ? { ...item, status: 'Voided' as const, isDeleted: true } : item);
+                                  saveAllData({ salesOrders: updatedSOs });
+                                  logAction('Voided Sales Ledger', `Moved sales ledger to Data Recovery Hub: ${so.soNumber}`);
+                                  toast.success(t('Sales invoice voided and moved to Data Recovery Hub.'));
                                 }
                               });
                             }}
-                            className="p-1 px-2 text-[10px] font-bold rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition inline-flex items-center gap-1"
-                            title="Delete Sales Ledger"
+                            className="p-1 px-2 text-[10px] font-bold rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition flex items-center gap-1"
+                            title="Void / Delete Sales Ledger"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            Delete
+                            {t('Delete')}
                           </button>
                         )}
                       </div>
                     </td>
                   </tr>
                 ))}
-            </tbody>
-          </table>
+                {storeFilteredSOs.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="p-12 text-center text-gray-400">
+                      <Monitor className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                      <p className="text-sm font-bold text-gray-600 mb-1">{t('No sales orders recorded yet.')}</p>
+                      <p className="text-xs text-gray-400 mb-4">{t('Use the POS Terminal to launch sales checkout sessions.')}</p>
+                      <button
+                        onClick={() => setShowSOModal(true)}
+                        className="bg-brand hover:bg-brand-hover text-white px-4 py-2 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition"
+                      >
+                        <Monitor className="w-4 h-4" /> {t('Open POS Terminal')}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -4204,6 +4585,7 @@ export default function App() {
             branches={branches}
             stores={stores}
             auditTrails={auditTrails}
+            securityLogs={securityLogs}
             rolePermissions={rolePermissions}
             currentUser={currentUser}
             currentCompanyId={currentCompanyId}
@@ -4286,42 +4668,53 @@ export default function App() {
           </div>
 
           <div className="lg:col-span-2 p-8 lg:p-12 flex flex-col justify-center bg-white">
-            <div className="w-full max-w-xs mx-auto space-y-6">
+            <div className="w-full max-w-sm mx-auto space-y-5">
               <div>
                 <h3 className="text-xl font-black text-gray-900">Sign In</h3>
-                <p className="text-xs text-gray-400 font-semibold mt-1">Access your assigned branch dashboard</p>
+                <p className="text-xs text-gray-400 font-semibold mt-0.5">Access your assigned branch dashboard</p>
               </div>
 
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-1.5">
+              <form onSubmit={handleLogin} className="space-y-3.5">
+                <div className="space-y-1">
                   <label className="text-[10px] font-bold text-gray-400 block tracking-wider uppercase">Username</label>
                   <input
                     type="text"
                     required
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none focus:ring-2 focus:ring-brand/15"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs bg-gray-50 outline-none focus:ring-2 focus:ring-brand/20 font-medium"
                     placeholder="Enter username"
                   />
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <label className="text-[10px] font-bold text-gray-400 block tracking-wider uppercase">Password</label>
                   <input
                     type="password"
                     required
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 outline-none focus:ring-2 focus:ring-brand/15"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs bg-gray-50 outline-none focus:ring-2 focus:ring-brand/20 font-medium"
                     placeholder="Enter account password"
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-2.5 bg-brand hover:bg-brand-hover text-white text-xs font-bold rounded-lg tracking-wider uppercase shadow transition-all duration-150"
+                  className="w-full py-2.5 bg-brand hover:bg-brand-hover text-white text-xs font-bold rounded-lg tracking-wider uppercase shadow transition-all duration-150 cursor-pointer"
                 >
                   Authorize Entry
                 </button>
               </form>
+
+              <div className="pt-2 border-t border-gray-100 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowPhpConfigModal(true)}
+                  className="text-[10px] text-emerald-600 hover:text-emerald-700 font-bold flex items-center gap-1"
+                >
+                  <Database className="w-3 h-3" />
+                  {t('cPanel DB Config')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4429,6 +4822,122 @@ export default function App() {
 
   return (
     <div className="h-screen overflow-hidden bg-[#f5f6f8] flex font-sans" style={rootStyle}>
+      {/* Full Application Loading & Synchronization Overlay */}
+      {isSyncingWithPhp && (
+        <div id="php-sync-loading-overlay" className="fixed inset-0 z-[9999] bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-white pointer-events-auto transition-opacity">
+          <div className="bg-slate-900 border border-slate-700/80 p-6 rounded-2xl shadow-2xl flex flex-col items-center max-w-sm text-center space-y-4">
+            <div className="relative w-12 h-12 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-emerald-500/20 animate-ping"></div>
+              <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+            <div>
+              <h4 className="font-bold text-base text-slate-100">{t('Syncing with Server')}</h4>
+              <p className="text-xs text-slate-400 mt-1.5 font-medium">{t(phpSyncMessage)}</p>
+            </div>
+            <div className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-800/50 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              {t('PHP & MySQL Synchronization Active')}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHP Server Connection & cPanel Settings Modal */}
+      {showPhpConfigModal && (
+        <div className="fixed inset-0 z-[9000] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-gray-900 text-sm">{t('cPanel / PHP Server Database Connection')}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPhpConfigModal(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              {t('Connect TradeCore ERP to your custom PHP backend API hosted on cPanel or custom server.')}
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t('PHP REST API Endpoint URL')}</label>
+                <input
+                  type="text"
+                  value={phpApiUrlInput}
+                  onChange={(e) => setPhpApiUrlInput(e.target.value)}
+                  placeholder="/api/php_sync.php or https://yourdomain.com/api.php"
+                  className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t('WebSocket Sync URL (Optional)')}</label>
+                <input
+                  type="text"
+                  value={phpWsUrlInput}
+                  onChange={(e) => setPhpWsUrlInput(e.target.value)}
+                  placeholder="wss://yourdomain.com/ws"
+                  className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t('X-API-Key Secret (Optional)')}</label>
+                <input
+                  type="password"
+                  value={phpApiKeyInput}
+                  onChange={(e) => setPhpApiKeyInput(e.target.value)}
+                  placeholder="Secret key for cPanel API authentication"
+                  className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/80 border border-emerald-100 p-3 rounded-xl text-[11px] text-emerald-900 space-y-1">
+              <span className="font-bold flex items-center gap-1">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                {t('cPanel Export Files Ready')}
+              </span>
+              <p className="text-[10px] text-emerald-700">
+                {t('The PHP backend script (api.php) and MySQL table schema (database.sql) are available in your /public/cpanel folder.')}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowPhpConfigModal(false)}
+                className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                {t('Cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  savePhpConfig({
+                    apiUrl: phpApiUrlInput,
+                    wsUrl: phpWsUrlInput,
+                    apiKey: phpApiKeyInput
+                  });
+                  toast.success(t('PHP Server connection settings saved!'));
+                  setShowPhpConfigModal(false);
+                  window.location.reload();
+                }}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm"
+              >
+                {t('Save & Connect')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar - Desktop Layout */}
       <div className={`hidden lg:block transition-all duration-300 flex-shrink-0 ${sidebarCollapsed ? 'w-[70px]' : 'w-64'}`}>
         <Sidebar
@@ -4760,7 +5269,7 @@ export default function App() {
                       </button>
                       <div className="text-[9px] text-green-600 bg-green-50/50 p-2 rounded border border-green-100 font-semibold flex items-center gap-1">
                         <CheckCircle className="w-3 h-3 flex-shrink-0" />
-                        <span>Dynamic Auto-Saving is fully active in local storage.</span>
+                        <span>Real-time Cloud Database Synchronization is Active.</span>
                       </div>
                     </div>
 

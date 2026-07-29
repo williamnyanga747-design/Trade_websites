@@ -145,7 +145,7 @@ export const AccountStatementModal: React.FC<AccountStatementModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
-      <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl overflow-hidden border border-gray-100 flex flex-col max-h-[92vh]">
+      <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl overflow-hidden border border-gray-100 flex flex-col max-h-[92vh] print-card">
         {/* Modal Header */}
         <div className="bg-slate-900 text-white p-5 flex items-center justify-between no-print">
           <div className="flex items-center gap-3">

@@ -1125,13 +1125,18 @@ export default function MasterData({
         </div>
       );
 
-    case 'data-recovery':
-      if (!isSuperAdmin) {
+    case 'data-recovery': {
+      const allowAdminAccess = settings?.allowAdminDataRecovery || false;
+      const isAdminUser = currentUser?.role === 'Admin';
+
+      if (!isSuperAdmin && (!isAdminUser || !allowAdminAccess)) {
         return (
           <div className="bg-red-50 border border-red-200 text-red-800 p-6 rounded-xl max-w-xl mx-auto text-center space-y-2 mt-8 shadow-sm">
             <div className="text-3xl">🔒</div>
             <h3 className="font-extrabold text-base">{t('Access Denied')}</h3>
-            <p className="text-xs font-medium text-red-700">{t('The Data Recovery Hub is strictly mandated and available ONLY to the Founder Super Admin.')}</p>
+            <p className="text-xs font-medium text-red-700">
+              {t('The Data Recovery Hub is restricted. Super Admin has not granted Admin permission for deleted Purchase Orders and Sales Invoices.')}
+            </p>
           </div>
         );
       }
@@ -1140,19 +1145,49 @@ export default function MasterData({
       const deletedBranches = branches.filter(b => b.isDeleted);
       const deletedStores = stores.filter(s => s.isDeleted);
       const deletedPurchases = purchaseOrders.filter(po => po.isDeleted);
-      const voidedSales = salesOrders.filter(so => so.status === 'Voided');
+      const voidedSales = salesOrders.filter(so => so.status === 'Voided' || so.isDeleted);
 
       return (
         <div className="space-y-6 max-w-4xl mx-auto">
           {/* Header */}
-          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl p-5 shadow-sm">
-            <h3 className="font-bold text-base flex items-center gap-2">
-              <RefreshCw className="w-5 h-5" />
-              {t('Data Recovery Hub')}
-            </h3>
-            <p className="text-xs text-emerald-100 mt-1 max-w-xl">
-              {t('Mistakes happen! Founder Super Admin can instantly restore soft-deleted companies, branches, or stores with their children nodes intact. All data remains preserved.')}
-            </p>
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <RefreshCw className="w-5 h-5" />
+                {t('Data Recovery Hub')}
+              </h3>
+              <p className="text-xs text-emerald-100 mt-1 max-w-xl">
+                {t('Restore soft-deleted records or voided transactions. All historical audit details remain preserved.')}
+              </p>
+            </div>
+
+            {/* Super Admin Toggle for Admin Access */}
+            {isSuperAdmin && (
+              <div className="bg-white/10 backdrop-blur-xs p-3 rounded-lg border border-white/20 shrink-0">
+                <label className="flex items-center gap-2.5 cursor-pointer text-xs font-bold text-white">
+                  <input
+                    type="checkbox"
+                    checked={allowAdminAccess}
+                    onChange={(e) => {
+                      const updatedSettings = {
+                        ...settings,
+                        allowAdminDataRecovery: e.target.checked
+                      };
+                      saveAllData({ settings: updatedSettings });
+                      toast.success(e.target.checked
+                        ? t('Data Recovery Hub access granted to Admins for POs and Sales Invoices!')
+                        : t('Data Recovery Hub access restricted to Super Admin only.')
+                      );
+                    }}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-white/20 border-white/30 cursor-pointer"
+                  />
+                  <span>{t('Grant Data Recovery Access to Admins')}</span>
+                </label>
+                <span className="block text-[10px] text-emerald-100 mt-0.5">
+                  {t('Admins can view and restore deleted POs and voided Sales Invoices when enabled.')}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Companies Section */}
@@ -1480,6 +1515,7 @@ export default function MasterData({
           </div>
         </div>
       );
+    }
 
     case 'exchange-rate':
       const currentGlobalRate = settings?.exchangeRate || 1;
